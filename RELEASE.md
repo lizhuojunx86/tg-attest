@@ -10,15 +10,36 @@ repo, this workflow file, and this environment. Nothing long-lived exists to lea
 
 ---
 
+## Part 0 — Rehearse before you tag
+
+**Do this first, every time you change anything about releasing.** It is the whole reason the
+rest of this document is short.
+
+<https://github.com/lizhuojunx86/tg-attest/actions/workflows/release.yml> → **Run workflow** →
+leave **dry_run** checked → Run.
+
+The rehearsal does everything a real release does except touch PyPI:
+
+- verifies Trusted Publishing is configured on **both** indexes, by actually exchanging an OIDC
+  token for an upload token (and immediately discarding it)
+- runs the full CI matrix, builds, checks the package contents
+- publishes a `X.Y.Z.devN` version to TestPyPI, which does not consume a real version number
+- installs that from TestPyPI into a clean virtualenv on 3.11 and 3.13 and makes it verify this
+  project's own disclosure bundle, plus three negative controls
+
+If it goes green, tagging will work. If it doesn't, you have lost nothing — no tag was used, no
+version number was burned, and the job summary tells you which step of Part 1 to go do.
+
+Nothing below needs a tag to test. That is deliberate: the previous release attempt failed
+because a tag was pushed before the pipeline existed, and finding that out cost a tag.
+
 ## Part 1 — One-time setup
 
-Six steps. All six require a browser session as you; none can be automated, and the reason is
-the same in every case: they are identity and trust decisions on accounts that only you control.
-A CI job that could configure its own publisher would defeat the point of Trusted Publishing.
+Five steps that only you can do, plus one that usually happens by itself. The reason is the same
+in every case: they are identity and trust decisions on accounts that only you control. A CI job
+able to configure its own publisher would defeat the point of Trusted Publishing.
 
 ### 1. Create the GitHub repository
-
-The repo does not exist yet. `git ls-remote` returns `Repository not found`.
 
 ```bash
 gh repo create lizhuojunx86/tg-attest --public \
@@ -28,22 +49,22 @@ gh repo create lizhuojunx86/tg-attest --public \
 **Why only you:** creating a public repository publishes the code. That is an irreversible
 outward-facing act and a public/private choice, both yours.
 
-### 2. Create the two GitHub environments
+*(Already done — the repo exists and is public.)*
 
-<https://github.com/lizhuojunx86/tg-attest/settings/environments>
+### 2. The two GitHub environments — usually nothing to do
 
-Create two, exactly these names — `release.yml` refers to them by name and a typo fails the job
-after the build has already run:
+`release.yml` references environments named `testpypi` and `pypi`. **GitHub creates them
+automatically the first time a job that references them runs**, with no protection rules, which
+is exactly what we want. You do not normally need to touch this page.
 
-| Name | Protection rules |
-|---|---|
-| `testpypi` | none |
-| `pypi` | none for now — see "Adding a reviewer" below |
+Verified on this repo: before the first release run, `gh api repos/.../environments` returned
+`total_count: 0` — nothing had been auto-created, because no job referencing them had ever run.
+They appear on the first rehearsal.
 
-Leave both empty. No secrets, no variables. The environments exist so PyPI can scope its trust
-to them, not to hold anything.
+Go to <https://github.com/lizhuojunx86/tg-attest/settings/environments> only if you want to add
+protection rules later — see "Adding a reviewer" below.
 
-**Why only you:** repository settings need owner rights on the repo.
+**Why you'd do it manually:** only to add protection rules, which needs repo owner rights.
 
 ### 3. Configure the PyPI trusted publisher
 
@@ -91,23 +112,25 @@ requests `contents: write` only in the `github-release` job, but the repo has to
 
 **Why only you:** repository settings.
 
-### 6. Push
+### 6. Push the code, then rehearse, then tag
+
+**Three separate commands. Do not combine them.**
 
 ```bash
-git push -u origin main --follow-tags
+git push origin main             # code only — no tag, no release
 ```
 
-`v0.1.0` is already tagged locally. Pushing it with `--follow-tags` triggers the release
-workflow immediately — so do steps 1–5 first, or the run will fail at the publish step and you
-will need to re-tag.
-
-If you would rather push the code first and release separately:
+Then run the Part 0 rehearsal and wait for it to go green. Only then:
 
 ```bash
-git push -u origin main          # no tags, no release
-# ... verify CI is green ...
-git push origin v0.1.0           # this triggers the release
+git push origin v0.1.0           # this, and only this, triggers a release
 ```
+
+**Never use `--follow-tags` as your normal push.** It pushes commits and tags together, which
+means the code and the release start in the same instant — and if the pipeline on the remote is
+not yet the pipeline you just wrote locally, you find out by burning a tag. That is exactly what
+happened before: `git push -u origin main --follow-tags` sent a tag pointing at a commit that
+predated `release.yml`, so no release workflow existed to run.
 
 **Why only you:** it publishes the repository.
 
@@ -119,15 +142,21 @@ git push origin v0.1.0           # this triggers the release
 # 1. Move the Unreleased items into a new version section
 $EDITOR CHANGELOG.md
 
-# 2. Commit
+# 2. Commit and push the code
 git add CHANGELOG.md && git commit -m "docs: changelog for 0.2.0"
+git push origin main
 
-# 3. Tag and push
+# 3. Tag and push the tag — separately
 git tag -a v0.2.0 -m "tg-attest 0.2.0"
-git push --follow-tags
+git push origin v0.2.0
 ```
 
-That is all. Watch it at
+Two pushes, deliberately. The first gets the code and any pipeline changes onto the remote; the
+second starts the release against a remote that already has them. Combining them with
+`--follow-tags` reintroduces the ordering hazard for no benefit — you save one command and give
+up the ability to see CI go green before releasing.
+
+Watch it at
 <https://github.com/lizhuojunx86/tg-attest/actions/workflows/release.yml>.
 
 The version number comes from the tag via setuptools-scm. Do not edit a version anywhere —
@@ -162,27 +191,82 @@ The verify step is the gate worth understanding. It installs the package the way
 from an index, and makes it verify this project's own disclosure bundle. If that fails, PyPI is
 never touched. A library about tamper-evidence must not ship a release it cannot itself verify.
 
-### If something goes wrong
+### When the order goes wrong, and how to recover
 
-**Failed before the `pypi` job.** Nothing was published to PyPI. Delete the tag, fix, re-tag:
+The failure mode this pipeline is built around: a tag reaches the remote before the thing that
+is supposed to act on it. Diagnose before touching anything.
 
-```bash
-git tag -d v0.2.0 && git push origin :refs/tags/v0.2.0
-```
-
-TestPyPI may already hold that version — TestPyPI is disposable, ignore it and bump to `.dev`
-or the next patch when retrying.
-
-**Failed after PyPI published.** The version is permanent; PyPI never allows reuse of a version
-number, even after deletion. Yank it and release a new patch:
+**Step 1 — find out how far it got.**
 
 ```bash
-# yank via https://pypi.org/manage/project/tg-attest/releases/
-git tag -a v0.2.1 -m "tg-attest 0.2.1" && git push --follow-tags
+gh run list --workflow=release.yml --limit 5
+gh run view <run-id> --log-failed          # if there is a run at all
+
+curl -s -o /dev/null -w '%{http_code}\n' https://pypi.org/pypi/tg-attest/json
+curl -s -o /dev/null -w '%{http_code}\n' https://test.pypi.org/pypi/tg-attest/json
 ```
 
-**Publishing to TestPyPI only**, to rehearse without touching PyPI: run the workflow manually
-from the Actions tab with **skip_pypi** checked.
+`404` from an index means the project has never been published there. If the project exists,
+check the specific version:
+
+```bash
+pip index versions tg-attest
+pip index versions tg-attest --index-url https://test.pypi.org/simple/
+```
+
+**Step 2 — match the evidence to a case.**
+
+| Case | Evidence | Version reusable? |
+|---|---|---|
+| **A** — failed before any upload, or never ran | PyPI 404 for this version, TestPyPI 404 for this version | **Yes** |
+| **B** — TestPyPI has it, PyPI does not | TestPyPI lists it, PyPI 404 | **Yes** — `skip-existing: true` on the TestPyPI step means a re-run tolerates the duplicate |
+| **C** — PyPI has it | PyPI lists the version | **No.** Already released. Do not attempt to republish |
+
+A special sub-case of A worth naming, because it is what happened here: `gh run list
+--workflow=release.yml` returns `HTTP 404: workflow release.yml not found on the default
+branch`. That means the tag was pushed to a remote whose default branch had no release
+pipeline — nothing ran, nothing was uploaded, and the tag is completely reusable.
+
+**Step 3 — recover.**
+
+*Case A or B* — delete the remote tag and push it again. Re-pushing the same tag re-triggers the
+workflow. Do not skip to the next version number; an unpublished version has not been used.
+
+```bash
+# make sure the fix is on the remote first
+git push origin main
+
+# move the local tag onto the commit that has the pipeline, if it isn't there already
+git tag -d v0.1.0
+git tag -a v0.1.0 -m "tg-attest 0.1.0"
+
+# delete the remote tag, then push the new one
+git push origin :refs/tags/v0.1.0
+git push origin v0.1.0
+```
+
+Rehearse (Part 0) between the first and last command if the failure was a configuration problem
+— that is what the rehearsal is for.
+
+*Case C* — the version is permanent. PyPI never allows reuse of a version number, even after
+deletion. Do not delete or re-tag. Verify what was published and move on:
+
+```bash
+python -m venv /tmp/check && /tmp/check/bin/pip install "tg-attest[tsa]==0.1.0"
+cd examples/verify-me
+/tmp/check/bin/python -m tg_attest.cli decision_0000.json --ca freetsa_ca.pem
+```
+
+If the published version is actually broken, yank it at
+<https://pypi.org/manage/project/tg-attest/releases/> and release a patch. Yanking hides it from
+resolvers without breaking anyone who pinned it.
+
+### Deleting a tag is safe; publishing is not
+
+Tags are pointers. Deleting and re-pushing one costs nothing as long as no release came out of
+it. The irreversible boundary is a successful PyPI upload — everything before that line can be
+redone, and nothing after it can. The pipeline is ordered so that everything cheap and
+reversible happens before that line, and the rehearsal lets you cross none of it.
 
 ---
 

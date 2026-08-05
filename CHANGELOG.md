@@ -72,9 +72,22 @@ code that never shipped.
   `__version__` reads package metadata. There is no version string in `pyproject.toml` or
   `__init__.py` to keep in sync, and `tests/test_version.py` fails if one reappears, if a tag
   has no CHANGELOG section, or if a non-tagged build reports a clean release number.
-- `RELEASE.md` — the one-time setup that only the maintainer can perform, each step with its URL,
-  the exact field values, and why it cannot be automated; plus the three-command routine for
-  every release after that.
+  Two things make the ordering of setup steps stop mattering. A **preflight** stage runs before
+  anything else and exchanges a real OIDC token for an upload token on both indexes — discarding
+  it immediately — so a missing Trusted Publishing configuration fails in about twenty seconds
+  with a pointer to the exact setup step, rather than after ten minutes at the last job with a
+  tag already spent. And a **dry run** (manual trigger, on by default) walks the entire path
+  except PyPI, publishing a `X.Y.Z.devN` version to TestPyPI, so the whole release can be
+  rehearsed without a tag.
+
+  `skip-existing` is set on the TestPyPI upload only. TestPyPI is a draft index and re-running a
+  pipeline should not fail because the last attempt already uploaded. It is deliberately absent
+  on the PyPI upload, where an existing version must fail loudly — a silent no-op there would
+  read as a successful release.
+- `RELEASE.md` — the setup that only the maintainer can perform, each step with its URL, the
+  exact field values, and why it cannot be automated; the routine for every release after that;
+  and a diagnosis-and-recovery section covering what to check, how to tell whether a version is
+  still reusable, and the exact commands to re-push a tag.
 
 ### Fixed
 

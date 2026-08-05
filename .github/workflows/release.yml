@@ -1,26 +1,32 @@
 name: Release
 
 # 打一个 vX.Y.Z 的 tag 推上去，剩下的全自动：
-#   跑完整 CI → 构建 → 发 TestPyPI → 从 TestPyPI 真装一遍并跑 30 秒复现
-#   → 发 PyPI → 用 CHANGELOG 对应小节建 GitHub Release
+#   前置检查 → 完整 CI → 构建 → TestPyPI → 从 TestPyPI 真装一遍并跑 30 秒复现
+#   → PyPI → 用 CHANGELOG 对应小节建 GitHub Release
 #
 # 仓库里没有任何 token。用的是 PyPI Trusted Publishing（OIDC）：
 # GitHub 签发一个短期身份令牌，PyPI 校验它来自这个仓库的这个 workflow
 # 的这个 environment。没有长期凭据可泄露，也没有需要轮换的东西。
 #
-# 中间那道 TestPyPI 验证是这条流水线的重点。它不是走过场——
-# 装不上、或者装上了验不过出厂包，就不发正式包。一个讲防篡改的库，
-# 最不能出的事就是发一个自己都验不过的包上去。
+# 两件事让「顺序错了」不再有代价：
+#
+#   preflight 排在最前面，直接拿 OIDC 令牌去 PyPI/TestPyPI 换一次上传令牌。
+#   换不到就说明可信发布还没配好，20 秒内失败并指到 RELEASE.md 的具体步骤，
+#   而不是跑满十分钟再挂在最后一步。
+#
+#   dry_run（手动触发，默认开）走完除 PyPI 之外的全部路径，用 .devN 版本
+#   发到 TestPyPI。整条发布链可以在不打 tag 的前提下彩排——
+#   不必再靠烧掉一个 tag 才发现配置漏了一步。
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
-      skip_pypi:
-        description: "只发 TestPyPI，不发正式 PyPI"
+      dry_run:
+        description: "彩排：走到 TestPyPI 验证为止，不发 PyPI、不建 Release"
         type: boolean
-        default: false
+        default: true
 
 concurrency:
   group: release-${{ github.ref }}
@@ -30,46 +36,148 @@ permissions:
   contents: read
 
 jobs:
-  # ---------------------------------------------------------------------
-  # 1. 完整 CI。不通过就不发布——这是复用而不是复制的那一份。
-  # ---------------------------------------------------------------------
-  ci:
-    uses: ./.github/workflows/ci.yml
+  # =====================================================================
+  # 0. 前置检查。所有外部前提在这里一次性验完，任何一条不满足就立刻停。
+  # =====================================================================
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      dry_run: ${{ steps.mode.outputs.dry_run }}
+    steps:
+      - id: mode
+        run: |
+          # tag 推送一律是正式发布；手动触发看输入，默认彩排。
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "dry_run=false" >> "$GITHUB_OUTPUT"
+            echo "模式：正式发布（由 tag ${GITHUB_REF_NAME} 触发）"
+          else
+            echo "dry_run=${{ inputs.dry_run }}" >> "$GITHUB_OUTPUT"
+            echo "模式：${{ inputs.dry_run && '彩排（dry run）' || '正式发布（手动触发）' }}"
+          fi
+
+      - name: Summarise the mode
+        run: |
+          {
+            echo "## 发布模式"
+            echo
+            if [ "${{ steps.mode.outputs.dry_run }}" = "true" ]; then
+              echo "**彩排** — 走到 TestPyPI 验证为止，不会碰正式 PyPI，不会建 Release。"
+            else
+              echo "**正式发布** — 全部检查通过后会发到 PyPI 并建 GitHub Release。"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------
-  # 2. tag 与 CHANGELOG 必须自洽，在构建之前就查
+  # 0a/0b. 分别在两个 environment 里，用 OIDC 真去换一次上传令牌。
+  #
+  # 这是唯一能在不上传任何东西的前提下，确认可信发布配对的办法：
+  # 令牌的 environment 声明是随 job 的 environment 走的，所以必须
+  # 各在各的 environment 里试。换到令牌就丢掉，不做任何上传。
   # ---------------------------------------------------------------------
+  preflight-testpypi:
+    needs: preflight
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/tg-attest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with: { sparse-checkout: .github, sparse-checkout-cone-mode: false }
+      - name: Trusted Publishing must already be configured on TestPyPI
+        env:
+          INDEX_HOST: test.pypi.org
+          INDEX_LABEL: TestPyPI
+          SETUP_STEP: "RELEASE.md 第 4 步（TestPyPI pending publisher）"
+          ENVIRONMENT_NAME: testpypi
+        run: bash .github/scripts/check-trusted-publisher.sh
+
+  preflight-pypi:
+    needs: preflight
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/tg-attest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with: { sparse-checkout: .github, sparse-checkout-cone-mode: false }
+      # 彩排时也查。彩排的价值就在于把「正式发布那天才发现没配好」提前到今天。
+      - name: Trusted Publishing must already be configured on PyPI
+        env:
+          INDEX_HOST: pypi.org
+          INDEX_LABEL: PyPI
+          SETUP_STEP: "RELEASE.md 第 3 步（PyPI pending publisher）"
+          ENVIRONMENT_NAME: pypi
+        run: bash .github/scripts/check-trusted-publisher.sh
+
+  # =====================================================================
+  # 1. 完整 CI。复用 ci.yml 而不是抄一份，否则两边迟早分叉。
+  # =====================================================================
+  ci:
+    needs: [preflight-testpypi, preflight-pypi]
+    uses: ./.github/workflows/ci.yml
+
+  # =====================================================================
+  # 2. 版本号与 CHANGELOG 自洽，在构建之前就查
+  # =====================================================================
   checks:
+    needs: preflight
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
-      notes: ${{ steps.notes.outputs.file }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0          # setuptools-scm 需要完整历史和 tag
 
-      - name: Derive version from the tag
+      - name: Determine the version being released
         id: v
+        env:
+          DRY_RUN: ${{ needs.preflight.outputs.dry_run }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG=$(git describe --tags --abbrev=0)
+          if [ "$DRY_RUN" = "true" ]; then
+            # 彩排不占用正式版本号：拿最近的 tag 把 patch 位加一，再挂 .devN。
+            # 不能直接用 setuptools-scm 推出来的 0.1.1.dev0+g<sha>——
+            # 带 local 段（+g...）的版本 PyPI 一律拒收。
+            LAST=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+            BASE="${LAST#v}"
+            NEXT=$(echo "$BASE" | awk -F. '{printf "%d.%d.%d", $1, $2, $3+1}')
+            VERSION="${NEXT}.dev${GITHUB_RUN_NUMBER}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+            [ "${{ github.event_name }}" = "workflow_dispatch" ] && TAG=$(git describe --tags --abbrev=0)
+            case "$TAG" in
+              v[0-9]*.[0-9]*.[0-9]*) ;;
+              *) echo "::error::tag 形式不对：$TAG（应为 vX.Y.Z）"; exit 1 ;;
+            esac
+            VERSION="${TAG#v}"
           fi
-          case "$TAG" in
-            v[0-9]*.[0-9]*.[0-9]*) ;;
-            *) echo "::error::tag 形式不对：$TAG（应为 vX.Y.Z）"; exit 1 ;;
-          esac
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
-          echo "发布版本：${TAG#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "版本：${VERSION}"
 
       - name: Extract the CHANGELOG section for this version
-        id: notes
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+          DRY_RUN: ${{ needs.preflight.outputs.dry_run }}
         run: |
           python - <<'PY'
           import os, re, pathlib
-          version = os.environ["VERSION"]
+          version, dry = os.environ["VERSION"], os.environ["DRY_RUN"] == "true"
           text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+
+          if dry:
+              # 彩排版本不会有自己的小节，改为确认 Unreleased 在，
+              # 否则下一次改动没地方记，发布时就得临时补，临时补的不会准。
+              if not re.search(r"^## \[Unreleased\]", text, re.MULTILINE):
+                  raise SystemExit("::error::CHANGELOG.md 缺少 [Unreleased] 小节")
+              pathlib.Path("RELEASE_NOTES.md").write_text(
+                  f"彩排构建 {version}，不对应任何发布。\n", encoding="utf-8")
+              print("彩排：跳过版本小节检查，只确认 Unreleased 在")
+              raise SystemExit(0)
+
           m = re.search(rf"^## \[{re.escape(version)}\].*?$(.*?)(?=^## \[|\Z)",
                         text, re.MULTILINE | re.DOTALL)
           if not m or len(m.group(1).strip()) < 80:
@@ -80,20 +188,17 @@ jobs:
                                                       encoding="utf-8")
           print(f"抽到 {len(m.group(1).strip())} 字符的发布说明")
           PY
-          echo "file=RELEASE_NOTES.md" >> "$GITHUB_OUTPUT"
-        env:
-          VERSION: ${{ steps.v.outputs.version }}
 
       - uses: actions/upload-artifact@v4
         with:
           name: release-notes
           path: RELEASE_NOTES.md
 
-  # ---------------------------------------------------------------------
-  # 3. 构建。sdist + wheel，并确认 setuptools-scm 推出来的版本就是 tag。
-  # ---------------------------------------------------------------------
+  # =====================================================================
+  # 3. 构建
+  # =====================================================================
   build:
-    needs: [ci, checks]
+    needs: [preflight, ci, checks]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -105,9 +210,21 @@ jobs:
           python-version: "3.13"
 
       - run: pip install build twine
-      - run: python -m build
 
-      - name: The built version must equal the tag
+      - name: Build
+        env:
+          DRY_RUN: ${{ needs.preflight.outputs.dry_run }}
+          VERSION: ${{ needs.checks.outputs.version }}
+        run: |
+          # 彩排时 HEAD 通常不在 tag 上，setuptools-scm 会推出带 local 段的
+          # 版本而 PyPI 拒收它，所以显式指定。正式发布不干预，让它从 tag 推。
+          if [ "$DRY_RUN" = "true" ]; then
+            export SETUPTOOLS_SCM_PRETEND_VERSION="$VERSION"
+            echo "彩排：固定版本为 $VERSION"
+          fi
+          python -m build
+
+      - name: The built version must be the one we intend to publish
         run: |
           EXPECTED="${{ needs.checks.outputs.version }}"
           test -f "dist/tg_attest-${EXPECTED}.tar.gz" \
@@ -141,9 +258,9 @@ jobs:
           name: dist
           path: dist/
 
-  # ---------------------------------------------------------------------
-  # 4. TestPyPI。environment: testpypi，OIDC 换取上传权限。
-  # ---------------------------------------------------------------------
+  # =====================================================================
+  # 4. TestPyPI
+  # =====================================================================
   testpypi:
     needs: [checks, build]
     runs-on: ubuntu-latest
@@ -151,7 +268,7 @@ jobs:
       name: testpypi
       url: https://test.pypi.org/p/tg-attest
     permissions:
-      id-token: write            # Trusted Publishing 靠这个，没有它就得放 token
+      id-token: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -163,11 +280,15 @@ jobs:
           repository-url: https://test.pypi.org/legacy/
           attestations: true     # PEP 740：为产物签发可验证的来源证明
           print-hash: true
+          # TestPyPI 是草稿索引，同一个版本重传应当被容忍——重跑一次流水线
+          # 不该因为「上次已经传过了」而失败。
+          # 正式 PyPI 那一步绝对不能加这个：那里版本已存在必须硬失败，
+          # 否则一次静默的空操作会被当成发布成功。
+          skip-existing: true
 
-  # ---------------------------------------------------------------------
-  # 5. 从 TestPyPI 真装一遍，跑 README 里那两条 30 秒复现命令。
-  #    这一步是整条流水线的闸门：装不上或验不过，就不发正式包。
-  # ---------------------------------------------------------------------
+  # =====================================================================
+  # 5. 从 TestPyPI 真装一遍并验证。这一步是整条流水线的闸门。
+  # =====================================================================
   verify-from-testpypi:
     needs: [checks, testpypi]
     runs-on: ubuntu-latest
@@ -182,7 +303,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: openssl version
 
-      # TestPyPI 索引有传播延迟，刚上传的版本可能还搜不到。重试而不是 sleep 一个固定值。
+      # TestPyPI 索引有传播延迟，刚上传的版本可能还搜不到。重试而不是等一个固定值。
       # --extra-index-url 指向正式 PyPI：asn1crypto / cryptography 不在 TestPyPI 上。
       - name: Install the just-published version from TestPyPI
         run: |
@@ -204,7 +325,7 @@ jobs:
             sleep 15
           done
 
-      - name: The installed version must be the one we tagged
+      - name: The installed version must be the one we built
         run: |
           GOT=$(/tmp/clean/bin/python -c "import tg_attest; print(tg_attest.__version__)")
           test "$GOT" = "${{ needs.checks.outputs.version }}" \
@@ -224,7 +345,7 @@ jobs:
           openssl ts -verify -digest "$DIGEST" \
             -in epoch_000.tsr -token_in -CAfile freetsa_ca.pem
 
-      # 反向对照。没有这两条，上面两条可能只是因为什么都没检查。
+      # 反向对照。没有这几条，上面两条可能只是因为什么都没检查。
       - name: Negative control — a tampered bundle must be rejected
         working-directory: examples/verify-me
         run: |
@@ -275,12 +396,42 @@ jobs:
           print("零依赖写入路径在真实安装环境下跑通")
           PY
 
-  # ---------------------------------------------------------------------
-  # 6. 正式 PyPI。只有上面那道闸门全过才会走到这里。
-  # ---------------------------------------------------------------------
+  # =====================================================================
+  # 6. 彩排到此为止
+  # =====================================================================
+  dry-run-summary:
+    needs: [preflight, checks, verify-from-testpypi]
+    if: ${{ needs.preflight.outputs.dry_run == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          {
+            echo "## 彩排通过"
+            echo
+            echo "整条发布路径已跑通，正式 PyPI 未被触碰。"
+            echo
+            echo "| 环节 | 结果 |"
+            echo "|---|---|"
+            echo "| PyPI 可信发布配置 | 已验证（成功换到上传令牌） |"
+            echo "| TestPyPI 可信发布配置 | 已验证 |"
+            echo "| 完整 CI 矩阵 | 通过 |"
+            echo "| 构建与包内容检查 | 通过 |"
+            echo "| 发到 TestPyPI | \`${{ needs.checks.outputs.version }}\` |"
+            echo "| 从 TestPyPI 装回并验证出厂披露包 | 通过（3.11 与 3.13） |"
+            echo
+            echo "可以正式发布了："
+            echo '```bash'
+            echo "git tag -a vX.Y.Z -m \"tg-attest X.Y.Z\""
+            echo "git push origin vX.Y.Z"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # =====================================================================
+  # 7. 正式 PyPI。只有上面那道闸门全过、且不是彩排，才会走到这里。
+  # =====================================================================
   pypi:
-    needs: [checks, build, verify-from-testpypi]
-    if: ${{ !inputs.skip_pypi }}
+    needs: [preflight, checks, build, verify-from-testpypi]
+    if: ${{ needs.preflight.outputs.dry_run == 'false' }}
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -293,19 +444,22 @@ jobs:
           name: dist
           path: dist/
 
+      # 这里刻意不加 skip-existing：版本已存在必须硬失败。
+      # 静默跳过会让一次「什么都没发生」被当成发布成功。
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           attestations: true
           print-hash: true
 
-  # ---------------------------------------------------------------------
-  # 7. GitHub Release，说明取自 CHANGELOG，附上产物。
-  # ---------------------------------------------------------------------
+  # =====================================================================
+  # 8. GitHub Release
+  # =====================================================================
   github-release:
-    needs: [checks, pypi]
+    needs: [preflight, checks, pypi]
+    if: ${{ needs.preflight.outputs.dry_run == 'false' }}
     runs-on: ubuntu-latest
     permissions:
-      contents: write            # 建 Release 需要写权限
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
