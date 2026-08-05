@@ -141,15 +141,31 @@ def test_version_matches_the_git_tag_when_head_is_a_clean_tag():
         f"装出来的版本 {tg_attest.__version__} 和 tag {tag} 对不上"
 
 
-def test_dev_versions_are_visibly_not_releases():
-    """不在 tag 上时版本号必须一眼看出不是发布版。
-    一个装了开发快照却报 0.1.0 的包，在合规场景里是能出事的。"""
-    code, _ = git("describe", "--tags", "--exact-match")
-    _, dirty = git("status", "--porcelain")
-    if code == 0 and not dirty:
-        pytest.skip("HEAD 就在 tag 上，本用例针对的是另一种情形")
-    assert not is_clean_release(tg_attest.__version__), \
-        f"非发布状态却报了一个干净的版本号：{tg_attest.__version__}"
+def test_scm_is_configured_so_non_release_builds_are_visibly_dev():
+    """非发布状态构建出来的版本必须一眼看出不是发布版。
+    一个装了开发快照却报 0.1.0 的包，在合规场景里是能出事的。
+
+    断言的是**配置**，不是当前进程里那个版本号。版本号是安装那一刻
+    冻结进元数据的，而工作树在那之后随时会变——editable 安装下
+    拿实时的 git 状态去对一个冻结的版本号，比的是两个不同的时刻，
+    编辑任何一个文件都会让它失败。那种测试会被当成噪音关掉。
+
+    guess-next-dev 保证 tag 之后的提交得到 0.1.1.devN，
+    local_scheme 再追加 +g<sha>，两者合起来不可能被误认成发布版。
+    """
+    scm = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["tool"]["setuptools_scm"]
+    assert scm.get("version_scheme") == "guess-next-dev", scm
+    assert scm.get("local_scheme") not in (None, "no-local-version"), \
+        "去掉 local_scheme 之后，dirty 构建和 tag 构建可能给出同一个版本号"
+
+
+def test_a_dev_version_string_is_never_mistaken_for_a_release():
+    """配置解释成结果：这几种形态都必须被判为「非发布版」。"""
+    for v in ("0.1.1.dev0+gf44bea9", "0.1.1.dev3+gabc.d20260805",
+              "0.2.0.dev1", "0.0.0+unknown"):
+        assert not is_clean_release(v), v
+    for v in ("0.1.0", "1.2.3", "10.0.1"):
+        assert is_clean_release(v), v
 
 
 # --- 与 CHANGELOG 一致 ----------------------------------------------------
