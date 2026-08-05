@@ -9,11 +9,13 @@ The first badge is the one that matters: it runs the same two commands you'll fi
 
 Sibling project to [TraceGuard](https://github.com/lizhuojunx86/traceguard), which solves the same point-in-time problem for quant backtest pipelines. Separate repo, separate package, no code dependency between them.
 
+There is a small piece of evidence that this library needed to exist. Publishing the data behind TraceGuard's founding measurement meant proving a claim about 2,163 vendor records while redistributing none of them, and the answer over there is a keyed digest per record plus coarse buckets, with the key held back for a single named auditor. That is a hand-rolled, worse version of what this repo does with Merkle inclusion proofs and an RFC 3161 timestamp. The requirement showed up on its own, before the library was reached for.
+
 Your observability stack logs that the model retrieved document X. It does not record what X said at the time, or that X got revised three weeks later. When a regulator asks you to justify a decision from March, "we retrieved X" proves nothing.
 
 tg-attest records the point-in-time state of every piece of evidence a decision consumed, chains the records so nobody can edit one, and anchors the chain to an RFC 3161 timestamp so nobody can rewrite all of them either. Including you. Especially you.
 
-I wrote the original TraceGuard after measuring a commercial fundamentals feed: 41.4% of `epsActual` values differ between first-seen and final, and 15.3% of those flip a trading decision. Same problem, bigger audience now. EU AI Act Article 12 has required automatic event logging for high-risk systems since August 2, 2026.
+I wrote the original TraceGuard after measuring a commercial fundamentals feed: across 2,163 earnings records, 41.4% of `epsActual` values differ between first-seen and final, and 15.3% of the 2,163 differ enough to flip a trading decision. The record set behind both numbers is published, along with the decision rule and everything wrong with the measurement — [method](https://github.com/lizhuojunx86/traceguard/blob/main/docs/eps-revision-methodology.md), and `python analysis/eps_revision.py` in that repo recomputes them from committed data with no dependencies. Same problem, bigger audience now. EU AI Act Article 12 has required automatic event logging for high-risk systems since August 2, 2026.
 
 ## What an auditor receives
 
