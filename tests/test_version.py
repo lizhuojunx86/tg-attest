@@ -86,9 +86,17 @@ def test_version_comes_from_package_metadata():
 
 
 def test_version_is_a_valid_pep440_string():
-    assert re.match(r"^\d+\.\d+\.\d+", tg_attest.__version__), tg_attest.__version__
-    assert tg_attest.__version__ != "0.0.0+unknown", \
+    v = tg_attest.__version__
+    assert v != "0.0.0+unknown", \
         "拿不到包元数据——包没装好，或者 setuptools-scm 没生效"
+    # 三段式。少一段几乎总是同一个原因，所以直接把原因写进断言消息：
+    # CI 里 actions/checkout 默认浅克隆（depth=1、不取 tag），
+    # setuptools-scm 看不到任何 tag，就退化成 0.1.devN+g<sha> 这种两段式。
+    # 症状出现在版本号上，病因在 checkout 配置里，不写清楚会查很久。
+    assert re.match(r"^\d+\.\d+\.\d+", v), (
+        f"版本号不是三段式：{v}。"
+        " 如果是在 CI 里，多半是 actions/checkout 没设 fetch-depth: 0——"
+        " 浅克隆里没有 tag，setuptools-scm 推不出正确版本。")
 
 
 def test_version_reading_needs_no_third_party_import():

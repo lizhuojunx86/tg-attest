@@ -19,6 +19,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # setuptools-scm 从 git tag 推版本号。默认的浅克隆（depth=1、不取 tag）
+          # 会让它推出 0.1.dev1+g<sha> 这种两段式版本，而且它的文件查找器会
+          # 报「listing git files failed」。装包的 job 一律要完整历史。
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -33,6 +38,11 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # setuptools-scm 从 git tag 推版本号。默认的浅克隆（depth=1、不取 tag）
+          # 会让它推出 0.1.dev1+g<sha> 这种两段式版本，而且它的文件查找器会
+          # 报「listing git files failed」。装包的 job 一律要完整历史。
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -84,6 +94,11 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # setuptools-scm 从 git tag 推版本号。默认的浅克隆（depth=1、不取 tag）
+          # 会让它推出 0.1.dev1+g<sha> 这种两段式版本，而且它的文件查找器会
+          # 报「listing git files failed」。装包的 job 一律要完整历史。
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -151,6 +166,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # setuptools-scm 从 git tag 推版本号。默认的浅克隆（depth=1、不取 tag）
+          # 会让它推出 0.1.dev1+g<sha> 这种两段式版本，而且它的文件查找器会
+          # 报「listing git files failed」。装包的 job 一律要完整历史。
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
