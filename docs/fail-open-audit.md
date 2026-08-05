@@ -103,6 +103,48 @@ promise, and each is visible in the data rather than silent:
 3. **`Ledger.verify()` reports rather than raises.** An audit needs the full list of
    violations, not the first one.
 
+## Hashing the representation instead of the value
+
+Not a fail-open class, and listed here anyway, because it is the trap this project has
+walked into **three times** in three unrelated places. Each time the bug was the same
+sentence: *the bytes fed to the hash were a rendering of the thing, not the thing.*
+
+| # | Where | The representation that got hashed | The value that should have been | How it showed up |
+|---|---|---|---|---|
+| 1 | `verify.py`, TSTInfo `eContent` | `asn1crypto`'s `.native` — the DER auto-parsed into a Python `dict` | the raw DER byte string in `eci["content"].contents`, which is what `signedAttrs`' `message-digest` actually covers | every token failed to verify; looked like broken TSAs |
+| 2 | `record.py`, canonical JSON | a `float`'s text form, which IEEE 754 renders inconsistently across languages and platforms | the number as a string (`"12.3400"`) or an integer in minor units | same object, two machines, two hashes — the whole chain unverifiable at audit time |
+| 3 | the TraceGuard disclosure pepper | the key file's 65 raw bytes, 64 ASCII hex characters plus `\n`, as digested by `shasum -a 256 pepper` | the 32 bytes those characters decode to, via `bytes.fromhex` | a plausible-looking 64-hex string that is simply not the committed value, reading as "wrong key on disk" when the key was fine |
+
+What makes this class nasty is that the wrong answer is *well-formed*. A representation hash
+is still 64 hex characters, still deterministic, still reproducible. Nothing looks broken; it
+just never equals the number it is compared against, and the natural conclusion is that the
+other side is wrong. Case 1 was read as broken TSAs, case 3 as a corrupted key. Case 2 was the
+worst of the three because it did not disagree on one machine — it only disagreed across two,
+which is precisely when nobody is watching.
+
+**Checklist before adding any new hash point.** For each, answer in one sentence in a comment
+at the call site:
+
+1. **What exactly is being committed to** — a byte string, or an object that has to be
+   serialised first? If the latter, the serialisation is part of the commitment and must be
+   pinned, not left to a default.
+2. **Is there a parsed/decoded form and an encoded form?** DER vs parsed ASN.1, hex vs bytes,
+   base64 vs bytes, `str` vs `bytes`, JSON text vs object. Name which one is hashed. If the
+   answer needs a "well, it depends", it is already wrong.
+3. **Can a verifier reach the same bytes from what is published?** If a third party has to
+   guess whether to strip a newline, hex-decode, or re-serialise, they will guess wrong, and
+   they will conclude your data is bad rather than their method.
+4. **Does the documented check command produce the committed value?** Not "does it look
+   right" — run it and diff it. Anything a reader will copy-paste is part of the interface.
+   Test it out of the document, the way `tests/test_readme_repro.py` does here and
+   `tests/test_eps_revision.py` does in TraceGuard.
+5. **Is there a cheap negative control?** Hash the *other* form deliberately and assert it
+   differs. That is the only way to prove the check is testing what you think.
+
+The recurring root cause is a convenience API that hands you the parsed thing when you asked
+for the stored thing — `.native`, `json.dumps` on a float, `read_text()` on a key file. The
+convenience is the hazard.
+
 ## What this audit cannot cover
 
 Fail-open analysis asks whether a *check* is skipped. It cannot ask whether the thing being
