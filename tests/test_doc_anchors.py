@@ -63,11 +63,26 @@ def heading_anchors(markdown: str) -> set[str]:
     return set(found)
 
 
+# 从 sdist 解包出来跑的时候没有 .git，`git ls-files` 会以 128 退出。这个套件
+# 必须能在解包后的 sdist 里跑（CI 有一条 job 专门验这个），所以 git 不可用时
+# 退回文件系统遍历。
+_WALK_SKIP = {
+    ".git", ".venv", "venv", "node_modules", "build", "dist", "mutants",
+    ".pytest_cache", ".ruff_cache", ".mypy_cache", "__pycache__", "htmlcov",
+}
+
+
 def tracked_markdown() -> list[Path]:
-    out = subprocess.run(
-        ["git", "ls-files", "*.md"], cwd=ROOT, capture_output=True, text=True, check=True
-    )
-    return [ROOT / line for line in out.stdout.splitlines() if line]
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "*.md"], cwd=ROOT, capture_output=True, text=True, check=True
+        )
+        paths = [ROOT / line for line in out.stdout.splitlines() if line]
+        if paths:
+            return paths
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        pass
+    return [p for p in sorted(ROOT.rglob("*.md")) if not _WALK_SKIP & set(p.relative_to(ROOT).parts)]
 
 
 ANCHOR_LINK = re.compile(r"\]\(([^)\s]*)#([^)\s]+)\)")
