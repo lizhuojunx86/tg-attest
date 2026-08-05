@@ -14,4 +14,9 @@ recursive-include examples *.py *.json *.pem *.tsr
 # 参考实现不进发布包。它含有已知的 fail-open 缺陷，刻意保留在仓库里
 # 做溯源用，没有理由跟着 pip install 进到任何人的环境里。
 prune reference
+
+# 下面这些是 setuptools-scm 的文件查找器按「git 跟踪的都算」拉进来的。
+# 对使用者没有用，去掉。
+prune .github
+exclude .gitignore RELEASE_NOTES.md
 exclude 0_START_HERE.md LAUNCH_POSTS.md

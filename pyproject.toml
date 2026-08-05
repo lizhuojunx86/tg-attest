@@ -1,10 +1,15 @@
 [build-system]
-requires = ["setuptools>=68"]
+# setuptools-scm 而不是 hatch-vcs：构建后端已经是 setuptools，换后端
+# 是为了一个版本号去动打包方式，不划算。
+requires = ["setuptools>=68", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "tg-attest"
-version = "0.1.0"
+# 版本号唯一来源是 git tag。原来 pyproject / __version__ / CHANGELOG
+# 三处各写一遍靠人盯着对齐——那种约定迟早会漂，而一个讲「记录必须
+# 和事实一致」的库，自己的版本号对不上是很难解释的。
+dynamic = ["version"]
 description = "Tamper-evident decision records for AI systems, anchored to RFC 3161 timestamps."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -39,6 +44,13 @@ dev = ["pytest>=7.4", "ruff>=0.6", "mutmut>=3.2"]
 Homepage = "https://github.com/lizhuojunx86/tg-attest"
 Source = "https://github.com/lizhuojunx86/tg-attest"
 Issues = "https://github.com/lizhuojunx86/tg-attest/issues"
+
+[tool.setuptools_scm]
+# 只从 tag 推导，不写版本文件进源码树——写文件等于又多了一个可能漂的副本。
+# 打了 tag 的提交得到干净版本号（0.1.0），tag 之后的提交得到
+# 0.1.1.dev3+g<sha>，一眼能看出装的不是发布版。
+version_scheme = "guess-next-dev"
+local_scheme = "node-and-date"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -112,12 +112,42 @@ The bundled default TSAs are **not** eIDAS qualified. Article 41(1) means a non-
 
 That last point is the same problem the library exists to solve, showing up in the trust anchor itself.
 
+## What we found in our own code
+
+These four documents are the most useful thing in this repository, and they are all about
+places where this library was wrong or still is.
+
+| | |
+|---|---|
+| [**docs/fail-open-audit.md**](docs/fail-open-audit.md) | Every `except`, default branch and `.get(key, default)` in the package, each judged on one question: when this path is taken, does the result get stricter or looser? Six were looser. Three fail-open paths remain, deliberately, and they're named. |
+| [**docs/mutation-testing.md**](docs/mutation-testing.md) | Line coverage said 100% while three fail-open defects sat on covered lines. Mutation testing asks the useful question instead — if the code were wrong, would a test fail? It found four chain-validation branches that no test reached, all of which accepted evidence they should have rejected. |
+| [**docs/claims-evidence.md**](docs/claims-evidence.md) | Every factual claim in this README, with the test or measurement backing it. Five claims failed the check and were rewritten weaker. One of them — "working against three live TSAs" — had been true only in the sense that it printed a pass. |
+| [**docs/threat-model.md**](docs/threat-model.md) | What this defends against and what it doesn't. The second half is longer than the first. |
+
+Also: [docs/article12.md](docs/article12.md) maps EU AI Act Article 12 requirement by
+requirement onto what this library does and does not cover, and
+[SECURITY.md](SECURITY.md) is the disclosure policy.
+
 ## Install
 
 ```bash
 pip install tg-attest              # writing path, zero dependencies
 pip install tg-attest[tsa]         # verification path, adds asn1crypto + cryptography
 ```
+
+Releases are published from a GitHub Actions workflow via PyPI Trusted Publishing — no API
+tokens exist for this project — and every artifact carries a [PEP 740](https://peps.python.org/pep-0740/)
+attestation binding it to the commit and workflow run that built it. Check it:
+
+```bash
+pip download tg-attest --no-deps
+# per-file provenance at https://pypi.org/project/tg-attest/#files
+```
+
+A library that asks you to trust its records should be able to show where its own artifacts came
+from. See [RELEASE.md](RELEASE.md) for the pipeline, including the step that installs each
+release from TestPyPI and makes it verify this project's own disclosure bundle before PyPI is
+touched at all.
 
 The write path runs in your production loop, so it requires nothing but the standard library. If `[tsa]` happens to be installed, anchoring also checks on the spot that the token it got back stamps the hash it sent and echoes the nonce — a cheap way to catch a substituted response now rather than at audit time. Without it that check is skipped and recorded as skipped, never as passed.
 

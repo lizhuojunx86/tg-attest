@@ -1,0 +1,344 @@
+name: Release
+
+# 打一个 vX.Y.Z 的 tag 推上去，剩下的全自动：
+#   跑完整 CI → 构建 → 发 TestPyPI → 从 TestPyPI 真装一遍并跑 30 秒复现
+#   → 发 PyPI → 用 CHANGELOG 对应小节建 GitHub Release
+#
+# 仓库里没有任何 token。用的是 PyPI Trusted Publishing（OIDC）：
+# GitHub 签发一个短期身份令牌，PyPI 校验它来自这个仓库的这个 workflow
+# 的这个 environment。没有长期凭据可泄露，也没有需要轮换的东西。
+#
+# 中间那道 TestPyPI 验证是这条流水线的重点。它不是走过场——
+# 装不上、或者装上了验不过出厂包，就不发正式包。一个讲防篡改的库，
+# 最不能出的事就是发一个自己都验不过的包上去。
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      skip_pypi:
+        description: "只发 TestPyPI，不发正式 PyPI"
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------
+  # 1. 完整 CI。不通过就不发布——这是复用而不是复制的那一份。
+  # ---------------------------------------------------------------------
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  # ---------------------------------------------------------------------
+  # 2. tag 与 CHANGELOG 必须自洽，在构建之前就查
+  # ---------------------------------------------------------------------
+  checks:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      notes: ${{ steps.notes.outputs.file }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # setuptools-scm 需要完整历史和 tag
+
+      - name: Derive version from the tag
+        id: v
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG=$(git describe --tags --abbrev=0)
+          fi
+          case "$TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::tag 形式不对：$TAG（应为 vX.Y.Z）"; exit 1 ;;
+          esac
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "发布版本：${TAG#v}"
+
+      - name: Extract the CHANGELOG section for this version
+        id: notes
+        run: |
+          python - <<'PY'
+          import os, re, pathlib
+          version = os.environ["VERSION"]
+          text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          m = re.search(rf"^## \[{re.escape(version)}\].*?$(.*?)(?=^## \[|\Z)",
+                        text, re.MULTILINE | re.DOTALL)
+          if not m or len(m.group(1).strip()) < 80:
+              raise SystemExit(
+                  f"::error::CHANGELOG.md 里没有 {version} 的小节，或内容为空。"
+                  " 发布说明就是从这一节来的，不能发一个没有说明的版本。")
+          pathlib.Path("RELEASE_NOTES.md").write_text(m.group(1).strip() + "\n",
+                                                      encoding="utf-8")
+          print(f"抽到 {len(m.group(1).strip())} 字符的发布说明")
+          PY
+          echo "file=RELEASE_NOTES.md" >> "$GITHUB_OUTPUT"
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: RELEASE_NOTES.md
+
+  # ---------------------------------------------------------------------
+  # 3. 构建。sdist + wheel，并确认 setuptools-scm 推出来的版本就是 tag。
+  # ---------------------------------------------------------------------
+  build:
+    needs: [ci, checks]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - run: pip install build twine
+      - run: python -m build
+
+      - name: The built version must equal the tag
+        run: |
+          EXPECTED="${{ needs.checks.outputs.version }}"
+          test -f "dist/tg_attest-${EXPECTED}.tar.gz" \
+            || { echo "::error::没有构建出 tg_attest-${EXPECTED}.tar.gz"; ls dist; exit 1; }
+          test -f "dist/tg_attest-${EXPECTED}-py3-none-any.whl" \
+            || { echo "::error::没有构建出 ${EXPECTED} 的 wheel"; ls dist; exit 1; }
+          echo "版本一致：${EXPECTED}"
+
+      - run: python -m twine check dist/*
+
+      - name: reference/ must not be in the distribution
+        run: |
+          if tar tzf dist/*.tar.gz | grep -q "reference/"; then
+            echo "::error::参考实现含已知 fail-open 缺陷，不能进发布包"
+            exit 1
+          fi
+
+      - name: The sdist must carry the repro bundle and a runnable suite
+        run: |
+          for f in examples/verify-me/decision_0000.json \
+                   examples/verify-me/freetsa_ca.pem \
+                   examples/verify-me/epoch_000.tsr \
+                   tests/conftest.py fixtures/decision_0000.json; do
+            tar tzf dist/*.tar.gz | grep -q "$f" \
+              || { echo "::error::sdist 里缺少 $f"; exit 1; }
+          done
+          echo "sdist 自带复现材料与可运行的测试套件"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  # ---------------------------------------------------------------------
+  # 4. TestPyPI。environment: testpypi，OIDC 换取上传权限。
+  # ---------------------------------------------------------------------
+  testpypi:
+    needs: [checks, build]
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/tg-attest
+    permissions:
+      id-token: write            # Trusted Publishing 靠这个，没有它就得放 token
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          attestations: true     # PEP 740：为产物签发可验证的来源证明
+          print-hash: true
+
+  # ---------------------------------------------------------------------
+  # 5. 从 TestPyPI 真装一遍，跑 README 里那两条 30 秒复现命令。
+  #    这一步是整条流水线的闸门：装不上或验不过，就不发正式包。
+  # ---------------------------------------------------------------------
+  verify-from-testpypi:
+    needs: [checks, testpypi]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4     # 只为拿 examples/verify-me 和 README
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: openssl version
+
+      # TestPyPI 索引有传播延迟，刚上传的版本可能还搜不到。重试而不是 sleep 一个固定值。
+      # --extra-index-url 指向正式 PyPI：asn1crypto / cryptography 不在 TestPyPI 上。
+      - name: Install the just-published version from TestPyPI
+        run: |
+          python -m venv /tmp/clean
+          VERSION="${{ needs.checks.outputs.version }}"
+          for i in 1 2 3 4 5 6 7 8; do
+            if /tmp/clean/bin/pip install \
+                 --index-url https://test.pypi.org/simple/ \
+                 --extra-index-url https://pypi.org/simple/ \
+                 "tg-attest[tsa]==${VERSION}"; then
+              echo "第 $i 次尝试装上了"
+              break
+            fi
+            if [ "$i" = "8" ]; then
+              echo "::error::TestPyPI 上装不到 ${VERSION}，中止发布"
+              exit 1
+            fi
+            echo "索引还没传播开，等 15 秒重试（第 $i 次）"
+            sleep 15
+          done
+
+      - name: The installed version must be the one we tagged
+        run: |
+          GOT=$(/tmp/clean/bin/python -c "import tg_attest; print(tg_attest.__version__)")
+          test "$GOT" = "${{ needs.checks.outputs.version }}" \
+            || { echo "::error::装上的是 $GOT，期望 ${{ needs.checks.outputs.version }}"; exit 1; }
+          echo "装上的版本：$GOT"
+
+      # README「Verify it yourself」第二条：完整链条
+      - name: Repro command 2 — CLI verifies the shipped bundle
+        working-directory: examples/verify-me
+        run: /tmp/clean/bin/python -m tg_attest.cli decision_0000.json --ca freetsa_ca.pem
+
+      # README「Verify it yourself」第一条：不装本库，只用 openssl
+      - name: Repro command 1 — openssl alone verifies the timestamp
+        working-directory: examples/verify-me
+        run: |
+          DIGEST=$(grep -oE -- '-digest [0-9a-f]{64}' ../../README.md | head -1 | awk '{print $2}')
+          openssl ts -verify -digest "$DIGEST" \
+            -in epoch_000.tsr -token_in -CAfile freetsa_ca.pem
+
+      # 反向对照。没有这两条，上面两条可能只是因为什么都没检查。
+      - name: Negative control — a tampered bundle must be rejected
+        working-directory: examples/verify-me
+        run: |
+          /tmp/clean/bin/python - <<'PY'
+          import json
+          b = json.load(open("decision_0000.json"))
+          h = b["record"]["output_hash"]
+          b["record"]["output_hash"] = ("b" if h[0] != "b" else "c") + h[1:]
+          json.dump(b, open("tampered.json", "w"), ensure_ascii=False)
+          PY
+          if /tmp/clean/bin/python -m tg_attest.cli tampered.json --ca freetsa_ca.pem; then
+            echo "::error::被篡改的包竟然验过了，中止发布"
+            exit 1
+          fi
+
+      - name: Negative control — no trust root must not pass
+        working-directory: examples/verify-me
+        run: |
+          if /tmp/clean/bin/python -m tg_attest.cli decision_0000.json; then
+            echo "::error::没有信任根却判了通过，中止发布"
+            exit 1
+          fi
+
+      # 零依赖是产品特性，正式发布前最后确认一次。
+      - name: The write path must still install with zero dependencies
+        run: |
+          python -m venv /tmp/zerodep
+          /tmp/zerodep/bin/pip install \
+            --index-url https://test.pypi.org/simple/ \
+            --extra-index-url https://pypi.org/simple/ \
+            "tg-attest==${{ needs.checks.outputs.version }}"
+          /tmp/zerodep/bin/python - <<'PY'
+          import importlib.util, sys
+          for m in ("asn1crypto", "cryptography"):
+              if importlib.util.find_spec(m) is not None:
+                  sys.exit(f"::error::{m} 被意外拉进了核心依赖")
+          from tg_attest import Ledger, EvidenceRef, GateVerdict
+          led = Ledger()
+          led.append(actor={"type": "agent", "id": "a"},
+                     model={"provider": "p", "id": "m", "params_hash": "h"},
+                     inputs={"x": 1}, output={"y": 2},
+                     evidence=[EvidenceRef.of("s", {"v": "1"},
+                                              as_of="2026-05-02T20:00:00+00:00")],
+                     gates=[GateVerdict("g", "pass", {})],
+                     profile="eu-ai-act")
+          led.seal_epoch()
+          assert led.verify() == []
+          print("零依赖写入路径在真实安装环境下跑通")
+          PY
+
+  # ---------------------------------------------------------------------
+  # 6. 正式 PyPI。只有上面那道闸门全过才会走到这里。
+  # ---------------------------------------------------------------------
+  pypi:
+    needs: [checks, build, verify-from-testpypi]
+    if: ${{ !inputs.skip_pypi }}
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/tg-attest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          attestations: true
+          print-hash: true
+
+  # ---------------------------------------------------------------------
+  # 7. GitHub Release，说明取自 CHANGELOG，附上产物。
+  # ---------------------------------------------------------------------
+  github-release:
+    needs: [checks, pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write            # 建 Release 需要写权限
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: .
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.checks.outputs.version }}
+        run: |
+          {
+            cat RELEASE_NOTES.md
+            echo
+            echo "---"
+            echo
+            echo "已发布到 PyPI，附带 PEP 740 来源证明（attestations）。验证："
+            echo '```bash'
+            echo "pip install tg-attest[tsa]==${VERSION}"
+            echo "pip download tg-attest==${VERSION} --no-deps"
+            echo "# 来源证明可在 https://pypi.org/project/tg-attest/${VERSION}/#files 查看"
+            echo '```'
+            echo
+            echo "不装任何东西就验证本项目自己的出厂披露包，见 README 的 "
+            echo "[Verify it yourself](https://github.com/${GITHUB_REPOSITORY}#verify-it-yourself-in-about-30-seconds)。"
+          } > body.md
+
+          gh release create "v${VERSION}" \
+            --title "tg-attest ${VERSION}" \
+            --notes-file body.md \
+            --repo "${GITHUB_REPOSITORY}" \
+            dist/*

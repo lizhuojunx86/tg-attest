@@ -20,7 +20,17 @@ from __future__ import annotations
 from .anchor import AnchorQueue, anchor_hash
 from .record import DecisionRecord, EpochSeal, EvidenceRef, GateVerdict, Ledger
 
-__version__ = "0.1.0"
+# 版本号从已安装的包元数据读，唯一来源是 git tag（见 pyproject 的
+# setuptools_scm）。importlib.metadata 是标准库，不违反零依赖。
+# 从源码树直接跑而没装包时拿不到元数据，退回一个明显是假的值——
+# 报一个看起来像真版本号的猜测，比报「未知」更糟。
+try:
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as _pkg_version
+
+    __version__ = _pkg_version("tg-attest")
+except PackageNotFoundError:            # pragma: no cover - 未安装时才会走到
+    __version__ = "0.0.0+unknown"
 
 __all__ = [
     # 写入路径：零依赖

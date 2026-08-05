@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # release.yml 直接复用这整个 workflow，而不是把测试步骤抄一份过去。
+  # 抄一份的话，两边迟早分叉，而分叉的那一天你不会发现——
+  # 发布流水线会用一份比 CI 弱的测试放行一个版本。
+  workflow_call:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

@@ -8,7 +8,7 @@ may break the API.
 
 Nothing yet.
 
-## [0.1.0] — unreleased
+## [0.1.0] — 2026-08-05
 
 First packaged release. The reference implementation had been working end to end against three
 live TSAs; turning it into a package surfaced six defects in the verification path, all of which
@@ -53,9 +53,28 @@ code that never shipped.
   referencing records that do not exist.
 - Documentation: `docs/article12.md`, `docs/threat-model.md`, `docs/fail-open-audit.md`,
   `docs/mutation-testing.md`, `docs/claims-evidence.md`, `SECURITY.md`.
-- 720 offline tests plus 9 network tests (deselected by default, run nightly in CI).
+- 837 offline tests plus 9 network tests (deselected by default, run nightly in CI).
 - Offline fixtures that do not expire, because certificate validity is checked against the
   genTime frozen inside the token rather than the wall clock.
+- **Automated release pipeline.** Pushing a `vX.Y.Z` tag runs the full CI matrix, builds, and
+  publishes — no tokens anywhere, using PyPI Trusted Publishing (OIDC) with separate `testpypi`
+  and `pypi` environments. Every artifact carries a PEP 740 attestation binding it to the commit
+  and workflow run that produced it.
+
+  Between TestPyPI and PyPI there is a gate that does the thing this library is about: it
+  installs the just-published version from a real index into a clean virtualenv on 3.11 and
+  3.13, runs both README reproduction commands against the shipped disclosure bundle, and checks
+  three negative controls — a tampered bundle must be rejected, a missing trust root must not
+  pass, and the zero-dependency install must contain no crypto libraries. PyPI is not touched
+  unless all of that succeeds. Shipping a release that cannot verify its own evidence would be
+  the most embarrassing possible failure for this package.
+- **Single source of version truth.** The version comes from the git tag via setuptools-scm;
+  `__version__` reads package metadata. There is no version string in `pyproject.toml` or
+  `__init__.py` to keep in sync, and `tests/test_version.py` fails if one reappears, if a tag
+  has no CHANGELOG section, or if a non-tagged build reports a clean release number.
+- `RELEASE.md` — the one-time setup that only the maintainer can perform, each step with its URL,
+  the exact field values, and why it cannot be automated; plus the three-command routine for
+  every release after that.
 
 ### Fixed
 

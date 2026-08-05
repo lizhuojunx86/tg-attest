@@ -19,3 +19,10 @@ build/
 # mutmut 把源码复制进这里再插桩，是临时产物
 mutants/
 .mutmut-cache
+
+# release.yml 从 CHANGELOG 抽出来的临时发布说明
+RELEASE_NOTES.md
+
+# 作者的工作文件，不进公开仓库
+0_START_HERE.md
+LAUNCH_POSTS.md
