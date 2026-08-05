@@ -1,0 +1,87 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tg-attest"
+version = "0.1.0"
+description = "Tamper-evident decision records for AI systems, anchored to RFC 3161 timestamps."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Li Zhuojun" }]
+keywords = ["audit", "compliance", "eu-ai-act", "rfc3161", "timestamp", "merkle", "provenance"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Legal Industry",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security :: Cryptography",
+    "Topic :: System :: Logging",
+    "Typing :: Typed",
+]
+
+# 核心零依赖，刻意为之。写入路径跑在生产决策热路径上，不能因为一个
+# crypto 库的版本冲突拖垮部署；而且合规软件被采购时会审依赖树。
+# 这一行为空是本项目的产品特性，不是还没来得及填。
+dependencies = []
+
+[project.optional-dependencies]
+# 验证路径。跑在审计侧或离线任务里，允许有依赖。
+# CMS 验签与 X.509 链校验一律交给这两个库，不手写。
+tsa = ["asn1crypto>=1.5", "cryptography>=41"]
+dev = ["pytest>=7.4", "ruff>=0.6", "mutmut>=3.2"]
+
+[project.urls]
+Homepage = "https://github.com/lizhuojunx86/tg-attest"
+Source = "https://github.com/lizhuojunx86/tg-attest"
+Issues = "https://github.com/lizhuojunx86/tg-attest/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+tg_attest = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# 打网络的测试默认不跑。CI 的 nightly job 用 -m network 单独跑。
+addopts = "-m 'not network' --strict-markers"
+markers = [
+    "network: 真实调用外部 TSA，需要联网（默认 deselect）",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+target-version = "py311"
+# 参考实现原样保留，不参与 lint——它的价值在于「这份代码跑通过」，
+# 按今天的风格改一遍只会让它和当初验证过的那份对不上。
+extend-exclude = ["reference"]
+
+[tool.ruff.lint]
+# 刻意不开 UP（pyupgrade）。它想把 timezone.utc 改成 UTC、把
+# typing.Iterable 换成 collections.abc —— 都是对的，但改的是从参考实现
+# 逐行搬过来的代码，为一个别名去动它不划算。E/F/W/I/B 管的是真问题。
+select = ["E", "F", "W", "I", "B"]
+ignore = [
+    "E741",   # _node(l, r) 里的 l/r 是左右子节点，改名反而不好读
+    "E501",   # 注释里有中文，宽度按显示宽度算不准，line-length 只作软约束
+]
+
+[tool.ruff.lint.per-file-ignores]
+# conftest.py 必须在 import tg_attest 之前动 sys.path（否则变异测试跑的是
+# 原始代码而不是变异体，见文件里的注释），这就必然要求 import 不在顶部。
+"tests/conftest.py" = ["E402"]
+
+[tool.mutmut]
+# 变异测试。行覆盖率对这个库没有意义——上一轮那三个 fail-open 在
+# 100% 行覆盖下全是绿的。真正要问的是「代码写错时测试会不会失败」。
+#
+# source_paths 指整个包而不是单独两个文件：mutmut 会把 source_paths
+# 复制进 mutants/ 再在那里跑测试，只复制两个文件的话包是残的，
+# import tg_attest.anchor 直接就挂了。
+source_paths = ["src/tg_attest"]

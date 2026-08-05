@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.DS_Store
+*.tsr.tmp
+
+# 演示与示例跑出来的时间戳 token。每次跑都不一样，不该进版本库。
+*.tsr
+# 例外：30 秒复现用的那一份，它是仓库内容的一部分，见 README「Verify it yourself」
+!examples/verify-me/*.tsr
+
+# mutmut 把源码复制进这里再插桩，是临时产物
+mutants/
+.mutmut-cache

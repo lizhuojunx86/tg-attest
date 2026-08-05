@@ -1,0 +1,17 @@
+# SECURITY.md 告诉使用者：下载 sdist、跑一遍测试，作为供应链自检。
+# 那条建议只有在 sdist 里的测试真的能跑起来时才成立——而 setuptools
+# 默认只收 test_*.py，会漏掉 conftest.py / helpers.py / synthpki.py 和
+# fixtures/，收集阶段就 ImportError。
+#
+# 一个讲可核验的包，发出去的东西必须自己就能被核验。
+
+include LICENSE README.md CHANGELOG.md SECURITY.md
+recursive-include docs *.md
+recursive-include tests *.py
+recursive-include fixtures *.json *.pem
+recursive-include examples *.py *.json *.pem *.tsr
+
+# 参考实现不进发布包。它含有已知的 fail-open 缺陷，刻意保留在仓库里
+# 做溯源用，没有理由跟着 pip install 进到任何人的环境里。
+prune reference
+exclude 0_START_HERE.md LAUNCH_POSTS.md

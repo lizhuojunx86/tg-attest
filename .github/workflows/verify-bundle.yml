@@ -1,0 +1,84 @@
+name: Verify shipped bundle
+
+# 这个 workflow 存在的唯一目的是给 README 上那个 badge 一个真实的依据。
+#
+# 它跑的就是 README「Verify it yourself」里那两条命令，一字不差：
+# 一条只用 openssl（不装本库），一条用 CLI（完整链条）。
+# 完全离线——fixture 的证书有效期是按 token 内被签名的 genTime 校验的，
+# 不是墙钟，所以这个 job 十年后跑出来的结论和今天一样。
+#
+# 一个卖「可核验」的项目，第一件事就该是让人看见核验在跑。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: The bundle in this repo verifies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: openssl is present
+        run: openssl version
+
+      # 路线 A：不安装 tg-attest。审计方的零信任路径。
+      - name: Route A — verify the timestamp with openssl alone
+        working-directory: examples/verify-me
+        run: |
+          DIGEST=$(grep -oE -- '-digest [0-9a-f]{64}' ../../README.md | head -1 | awk '{print $2}')
+          echo "digest from README: $DIGEST"
+          openssl ts -verify -digest "$DIGEST" \
+            -in epoch_000.tsr -token_in -CAfile freetsa_ca.pem
+
+      # 对照组。没有这一步，上面那步可能只是因为 openssl 根本没在检查。
+      - name: Route A control — a wrong digest must fail
+        working-directory: examples/verify-me
+        run: |
+          if openssl ts -verify -digest $(printf 'ab%.0s' {1..32}) \
+               -in epoch_000.tsr -token_in -CAfile freetsa_ca.pem 2>/dev/null; then
+            echo "::error::错误的 digest 竟然验过了"
+            exit 1
+          fi
+          echo "wrong digest rejected, as it should be"
+
+      - run: pip install -e ".[tsa]"
+
+      # 路线 B：完整链条，含 Merkle 证明与完整性档案。
+      - name: Route B — verify the whole chain with the CLI
+        working-directory: examples/verify-me
+        run: python -m tg_attest.cli decision_0000.json --ca freetsa_ca.pem
+
+      # 对照组。改一个字符必须失败并退出 1。
+      - name: Route B control — a tampered bundle must fail
+        working-directory: examples/verify-me
+        run: |
+          python - <<'PY'
+          import json
+          b = json.load(open("decision_0000.json"))
+          h = b["record"]["output_hash"]
+          b["record"]["output_hash"] = ("b" if h[0] != "b" else "c") + h[1:]
+          json.dump(b, open("tampered.json", "w"), ensure_ascii=False)
+          PY
+          if python -m tg_attest.cli tampered.json --ca freetsa_ca.pem; then
+            echo "::error::被篡改的包竟然验过了"
+            exit 1
+          fi
+          echo "tampered bundle rejected, exit code 1, as documented"
+
+      - name: Refusing to pass without a trust root
+        working-directory: examples/verify-me
+        run: |
+          if python -m tg_attest.cli decision_0000.json; then
+            echo "::error::没有信任根却判了通过"
+            exit 1
+          fi
+          echo "no trust root, no pass"

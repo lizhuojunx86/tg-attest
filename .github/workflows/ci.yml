@@ -1,0 +1,179 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check src tests examples
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # openssl 必须在场。tests/test_tsq.py 在没有 openssl 时会 skip，
+      # 而那条逐字节比对是手写 DER 编码器唯一重要的正确性证明——
+      # 让它在 CI 里静默跳过等于没有这个测试。
+      - name: Assert openssl is available
+        run: openssl version
+
+      - run: pip install -e ".[tsa,dev]"
+
+      - name: Run tests (network tests deselected by default)
+        run: python -m pytest -v
+
+      - name: Assert the openssl byte-comparison actually ran
+        run: |
+          python -m pytest tests/test_tsq.py -v -rs 2>&1 | tee out.txt
+          if grep -q "SKIPPED" out.txt; then
+            echo "::error::TSQ 测试被跳过了，逐字节比对没有真的执行"
+            exit 1
+          fi
+
+      # 这几组是「验证器会不会在该拒绝的时候放行」的直接防线，
+      # 任何一组被 skip 掉都等于 CI 什么也没证明。
+      - name: Assert the fail-closed suites all really ran
+        run: |
+          python -m pytest -v -rs \
+            tests/test_required_checks.py \
+            tests/test_conclude_coverage.py \
+            tests/test_fail_closed.py \
+            tests/test_regressions.py \
+            tests/test_profile.py \
+            tests/test_chain_synthetic.py \
+            tests/test_cli_output.py 2>&1 | tee fc.txt
+          if grep -q "SKIPPED" fc.txt; then
+            echo "::error::fail-closed 测试里有被跳过的"
+            exit 1
+          fi
+
+  # 核心零依赖是本项目的产品特性，不是碰巧成立的现状。
+  # 这个 job 在一个真的没装 asn1crypto / cryptography 的环境里做验证——
+  # 比测试里的 meta_path 屏蔽更狠，因为包根本不在磁盘上。
+  zero-deps:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install WITHOUT the [tsa] extra
+        run: pip install .
+
+      - name: Assert the crypto libraries really are absent
+        run: |
+          python - <<'PY'
+          import importlib.util, sys
+          for m in ("asn1crypto", "cryptography"):
+              if importlib.util.find_spec(m) is not None:
+                  sys.exit(f"{m} 意外存在，这个 job 什么也没证明")
+          print("确认：asn1crypto 与 cryptography 都不在环境里")
+          PY
+
+      - name: Write-path modules must import
+        run: |
+          python -c "import tg_attest.record; print('tg_attest.record ok')"
+          python -c "import tg_attest.anchor; print('tg_attest.anchor ok')"
+          python -c "import tg_attest; print('tg_attest ok')"
+
+      - name: The whole write path must actually run
+        run: |
+          python - <<'PY'
+          from tg_attest import Ledger, EvidenceRef, GateVerdict, AnchorQueue
+          from tg_attest.anchor import build_tsq
+
+          led = Ledger()
+          led.append(
+              actor={"type": "agent", "id": "underwriting-v3"},
+              model={"provider": "anthropic", "id": "claude-opus-5",
+                     "params_hash": "cfg-a1b2"},
+              inputs={"application_id": "APP-88214"},
+              output={"decision": "refer"},
+              evidence=[EvidenceRef.of("bureau:score:APP-88214", {"score": "712"},
+                                       as_of="2026-05-02T20:00:00+00:00")],
+              gates=[GateVerdict("evidence_gate", "pass", {})],
+          )
+          seal = led.seal_epoch()
+          assert led.verify() == []
+          assert Ledger.verify_disclosure(led.disclose(0))
+
+          q = AnchorQueue()
+          q.enqueue(seal.epoch_id, seal.epoch_hash())
+          assert build_tsq(bytes.fromhex(seal.epoch_hash()))[0] == 0x30
+          print("零依赖写入路径跑通")
+          PY
+
+      - name: The verify path must fail with a useful message
+        run: |
+          python - <<'PY'
+          import tg_attest
+          try:
+              tg_attest.verify_bundle
+          except ImportError as e:
+              assert "tg-attest[tsa]" in str(e), str(e)
+              print("验证路径给出了可照做的提示")
+          else:
+              raise SystemExit("零依赖环境下 verify_bundle 不该可用")
+          PY
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build twine
+      - run: python -m build
+      - run: python -m twine check dist/*
+
+      # SECURITY.md 让使用者下载 sdist 跑一遍测试做供应链自检。
+      # 那条建议只有在 sdist 里的测试真能跑起来时才成立——
+      # setuptools 默认只收 test_*.py，会漏掉 conftest.py 和 fixtures/，
+      # 收集阶段就 ImportError。这个 job 保证 MANIFEST.in 不退化。
+      - name: The shipped sdist must contain a runnable test suite
+        run: |
+          mkdir -p /tmp/sdist && tar xzf dist/*.tar.gz -C /tmp/sdist
+          cd /tmp/sdist/tg_attest-*
+          pip install ".[tsa,dev]"
+          python -m pytest -q
+
+      - name: reference/ must not be in the distribution
+        run: |
+          if tar tzf dist/*.tar.gz | grep -q "reference/"; then
+            echo "::error::参考实现含已知 fail-open 缺陷，不能进发布包"
+            exit 1
+          fi
+          echo "reference/ excluded, as intended"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

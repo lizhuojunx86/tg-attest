@@ -1,0 +1,47 @@
+name: Nightly (live TSA)
+
+# 打网络的测试和主 CI 分开跑。混在一起会让 CI 变成一个「有时候红」的东西，
+# 而一个有时候红的 CI 等于没有 CI——人会开始习惯性忽略红灯。
+#
+# 但这些测试必须跑：build_tsq 与 openssl 逐字节一致只证明请求格式对，
+# 不证明真实 TSA 会接受它、返回的东西我们解析得了、签出来的 token 我们验得过。
+# 那是另一件事，只能真打一次才知道。
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+jobs:
+  live-tsa:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: openssl version
+      - run: pip install -e ".[tsa,dev]"
+
+      - name: Run the network-marked tests against live TSAs
+        run: python -m pytest -m network -v -rs
+
+  # fixtures/ 下的验证测试是离线的，而且按设计不会过期——证书有效期是拿
+  # token 内被签名的 genTime 校验的，不是墙钟。这个 job 定期确认这条仍然成立：
+  # 如果哪天它开始失败，说明有人把某处的时间判断换成了 datetime.now()。
+  offline-fixtures-do-not-expire:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e ".[tsa,dev]"
+      - run: python -m pytest tests/test_bundle.py tests/test_sig_algos.py -v
+      - name: Verify the shipped fixture with the CLI
+        run: |
+          python -m tg_attest.cli fixtures/decision_0000.json --ca fixtures/freetsa_ca.pem
