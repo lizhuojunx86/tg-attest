@@ -24,7 +24,7 @@ this repo cannot show it).
 | 8 | "They verify it with a CA certificate they obtain themselves" | `test_bundle_carries_no_ca_certificate`; `verify_bundle(b, None)` refuses to pass | **Holds** |
 | 9 | "They don't need this library, your database, or your cooperation" | The *timestamp* verifies with stock `openssl ts` (`test_token_written_to_disk_is_a_valid_tsr`). The *Merkle proof* does not — it needs this library or a reimplementation from the documented spec. | **Corrected** → now says the timestamp needs only openssl, and the proof needs either this library or ~40 lines from the spec |
 | 10 | Sample CLI output block | Showed 6 check lines; the CLI prints 9. Timestamp format also differed (`Z` vs `+00:00`, no milliseconds). | **Corrected** → replaced with actual verbatim output |
-| 11 | "Nine checks, each independent" | `len(BUNDLE_REQUIRED_CHECKS) == 9`; `test_every_link_in_the_chain_is_actually_checked` names all nine | **Holds** |
+| 11 | "Ten checks, each independent" | `len(BUNDLE_REQUIRED_CHECKS) == 10`; `test_every_link_in_the_chain_is_actually_checked` names all ten | **Holds** — this row said nine until 2026-08-09. The integrity-profile check took the count to ten when it was added; the README was updated and this table was not, which is the exact failure the standing rule at the bottom exists to prevent. Recorded rather than quietly corrected |
 | 12 | "Exit code 1 on any failure" | `test_cli_exit_one_without_ca`, `test_cli_exit_one_on_tampered`, `test_cli_exit_zero_on_valid` | **Holds** |
 | 13 | "one decision can be disclosed without exposing the rest of the epoch" | `test_bundle_does_not_contain_other_records`; `test_disclose_from_an_earlier_epoch_uses_the_right_span_and_index` | **Holds** |
 | 14 | "`as_of` and `observed_at` are separate fields on purpose" | Both are distinct fields on `EvidenceRef`; `test_append_preserves_evidence_and_gates` pins both | **Holds** |
@@ -83,7 +83,7 @@ Five, all in the direction of claiming less:
    Article 12 actually requires. The stronger word was doing work the regulation does not.
 3. **Auditor independence** — split into what openssl alone can do (the timestamp) and what it
    cannot (the Merkle proof).
-4. **Sample CLI output** — replaced with verbatim current output, all nine checks.
+4. **Sample CLI output** — replaced with verbatim current output, all ten checks.
 5. **Zero dependencies** — "uses nothing but" → "requires nothing but", plus one sentence on
    the optional write-time check.
 

@@ -6,7 +6,13 @@ may break the API.
 
 ## [Unreleased]
 
-Nothing yet.
+### Documentation corrections
+
+- `docs/claims-evidence.md` claimed nine required bundle checks. There are ten — the
+  integrity-profile check took the count from nine to ten when it was added, the README was
+  updated and this table was not. `len(BUNDLE_REQUIRED_CHECKS) == 10`. The table carries its own
+  standing rule to re-check whenever the README changes, and that rule was not followed, so the
+  row records the miss rather than quietly reading correctly.
 
 ## [0.1.0] — 2026-08-05
 
