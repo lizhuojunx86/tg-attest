@@ -240,6 +240,33 @@ and no access control, and it does not survive a restart. Two processes appendin
 will produce a corrupt chain. This is a reference implementation of the record format, not a
 database. See [article12.md](article12.md) for what production storage needs to provide.
 
+### The eIDAS qualified-status attestation is not covered by the timestamp
+
+`Anchor.tsa_qualified`, `eutl_ref` and `qualified_checked_at` record whether the TSA was an
+eIDAS qualified service **at the moment of stamping**. They are excluded from `epoch_hash`,
+and the exclusion is forced rather than chosen: the qualified verdict can only be computed
+once the token comes back, because the TSA's signing certificate is inside it — and
+`epoch_hash` is the *input* being stamped. Writing the verdict back in would invalidate the
+timestamp that was just obtained. This is the same constraint that keeps `tsa_token` out, and
+this project has already shipped that bug once.
+
+So the attestation is a claim by the recorder, not evidence. An operator with write access can
+change it after the fact and nothing in the chain will show it. What is genuinely checkable is
+`eutl_ref`: an auditor takes it to the trusted list and recomputes.
+
+That recomputation has its own limit, and it is not small. There is no official archive of past
+national trusted lists. A list downloaded today answers today's question. When an auditor's
+recomputation disagrees with the recorded attestation, the tool reports the disagreement and
+stops there — it cannot distinguish "the status was withdrawn in the meantime" from "the
+attestation was false". Deployments that need this to be settled must archive the signed list
+XML alongside the verdict; the snapshot records each list's SHA-256 and sequence number so that
+archive can be reconciled.
+
+Binding the verdict into the hash is possible — write epoch N's attestation into epoch N+1's
+hashed body, where the next seal stamps it. It costs a schema change and one epoch of lag, and
+it is deliberately not in this release. See `docs/eutl.md` and issue #3.
+
+
 ## Failure direction
 
 One design rule runs through the verification path: **when in doubt, refuse.**

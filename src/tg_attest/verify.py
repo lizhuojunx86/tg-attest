@@ -86,6 +86,9 @@ class VerifyResult:
     tsa_subject: str | None = None
     errors: list[str] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)   # 必需但没跑到的检查
+    # 记录方的声明，**不受时间戳保护**，因此与 checks 分开放。
+    # 混进 checks 会让人以为它和其他检查项一样是被验证过的东西。
+    attestations: dict = field(default_factory=dict)
 
     def conclude(self, required: tuple[str, ...]) -> "VerifyResult":
         """按必需清单收敛出最终结论。
@@ -106,6 +109,11 @@ class VerifyResult:
 
     def __str__(self) -> str:
         lines = [f"{'通过' if self.ok else '失败'}"]
+        for k, v in self.attestations.items():
+            q = v.get("tsa_qualified")
+            mark = {True: "是", False: "否", None: "未查"}.get(q, "未查")
+            lines.append(f"  · {k}：{mark}"
+                         + (f"（{v.get('eutl_ref')}）" if v.get("eutl_ref") else ""))
         for k, v in self.checks.items():
             lines.append(f"  {'✓' if v is True else '✗' if v is False else '·'} {k}"
                          + (f" — {v}" if not isinstance(v, bool) else ""))
@@ -375,10 +383,31 @@ def verify_bundle(bundle: dict, ca_bundle: bytes | None = None) -> VerifyResult:
             r.errors.append("时间戳校验未通过")
     except Exception as e:                       # noqa: BLE001
         r.errors.append(f"{type(e).__name__}: {e}")
+    _report_attestation(bundle, r)
     return r.conclude(BUNDLE_REQUIRED_CHECKS)
 
 
-def export_bundle(led, seq: int, path: str, *, allow_unanchored: bool = False) -> str:
+def _report_attestation(bundle: dict, r: "VerifyResult") -> None:
+    """把披露包里的 eIDAS 合格状态声明如实转述出来，**不当成检查项**。
+
+    刻意不放进 checks，也刻意不进 BUNDLE_REQUIRED_CHECKS：
+      · 它不受时间戳保护，与其他每一项检查的性质都不同；
+      · 「是否合格」是法律分类，不该成为技术验证的通过条件。一个用非合格
+        TSA 的包在技术上完全有效，只是举证责任在出具方那边（eIDAS 41(1)
+        对 41(2)）。让它决定 ok，等于把两件事混为一谈。
+    """
+    a = bundle.get("eutl_attestation")
+    if not isinstance(a, dict):
+        return
+    r.attestations["eIDAS 合格状态（记录方声明，未经本工具验证）"] = {
+        "tsa_qualified": a.get("tsa_qualified"),
+        "eutl_ref": a.get("eutl_ref"),
+        "checked_at": a.get("qualified_checked_at"),
+    }
+
+
+def export_bundle(led, seq: int, path: str, *, allow_unanchored: bool = False,
+                  anchor=None) -> str:
     """导出自包含披露包。写盘的是纯 JSON，不含任何本库特有格式。
 
     没有 tsa_token 的 epoch 默认拒绝导出。这种包在 verify_bundle 那边
@@ -405,6 +434,23 @@ def export_bundle(led, seq: int, path: str, *, allow_unanchored: bool = False) -
     }
     if not b["tsa_token"]:
         b["_verify"]["warning"] = "未锚定：本包无时间戳，不能证明存在时刻。"
+
+    # eIDAS 合格状态。传了 anchor 才写，且必须写清楚它不受时间戳保护——
+    # 合格状态只有拿到 token 之后才算得出来，而 epoch_hash 是被盖戳的
+    # *输入*，把它算进去会让刚取回的时间戳当场失效（不变量 5）。
+    # 所以这是一项**声明**，不是一项证据。审计方要复核，就拿 eutl_ref
+    # 自己去查可信列表；本包不提供、也不应提供那份列表。
+    if anchor is not None and getattr(anchor, "tsa_qualified", None) is not None:
+        b["eutl_attestation"] = {
+            "tsa_qualified": anchor.tsa_qualified,
+            "eutl_ref": anchor.eutl_ref,
+            "qualified_checked_at": anchor.qualified_checked_at,
+            "reason": anchor.qualified_reason,
+            "_not_covered_by_timestamp": (
+                "本节由记录方在盖戳时写入，不参与 epoch_hash，因此不受时间戳"
+                "保护，可被事后修改而不留痕。要独立复核，用 eutl_ref 到 "
+                "EU 可信列表自行查询，不要以本节为准。"),
+        }
 
     with open(path, "w", encoding="utf-8") as f:
         # 不用 default=str。序列化不了的值应当当场抛错，而不是被悄悄

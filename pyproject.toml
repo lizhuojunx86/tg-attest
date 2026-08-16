@@ -38,6 +38,10 @@ dependencies = []
 # 验证路径。跑在审计侧或离线任务里，允许有依赖。
 # CMS 验签与 X.509 链校验一律交给这两个库，不手写。
 tsa = ["asn1crypto>=1.5", "cryptography>=41"]
+# EU 可信列表快照构建。只在离线构建阶段用，绝不进写入路径。
+# lxml 只承担一件事：排除式 c14n。签名运算全部交给 cryptography。
+# 自己实现 c14n 是本功能最容易出错的地方，而它算密码学的一部分。
+eutl = ["asn1crypto>=1.5", "cryptography>=41", "lxml>=5.0"]
 dev = ["pytest>=7.4", "ruff>=0.6", "mutmut>=3.2"]
 
 [project.urls]

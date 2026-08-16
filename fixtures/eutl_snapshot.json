@@ -1,0 +1,185 @@
+{
+  "built_at": "2026-08-16T00:00:00+00:00",
+  "lotl": {
+    "built_note": "trimmed fixture",
+    "issue_date": "2026-08-03T13:16:38Z",
+    "oj_reference": "https://eur-lex.europa.eu/eli/C/2026/1944/oj",
+    "sequence_number": "390",
+    "sha256": "3692a6df1e2c7c8d8b92b1643998d0ca0820c80551f42e8ef7c38c1cd85f8a83",
+    "signer_sha256": "e0a620fbb6747362bb933ac44169d676a553444716cf5f31605f12a22b8396b1",
+    "url": "https://ec.europa.eu/tools/lotl/eu-lotl.xml"
+  },
+  "services": [
+    {
+      "cc": "BE",
+      "history": [
+        [
+          "2019-09-06T00:00:00+00:00",
+          "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted"
+        ]
+      ],
+      "is_ca": false,
+      "ref": "BE:81:0001",
+      "spki_der_b64": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAtSnqXY5vaXpOoyZ95QEicHpfP8Jpplz6KH7oTm7Dvla1DLTsIN6951VBLYu80qfZ9dwxiP9iyzPWgvTWyewa9cVUlGVW2oRBqVyEaxVZxRXFcCpHHwba4vAM90PFgbu0fAuibtnCx9hHwlXCEeKTaqWlrkmJv9iDX1uUO5+7IQ1D0ajjZd3eaf2ws1G9aTZtDQXiuIZF1H3xhlQXy46ueWi4vD7O8eOacmQYXay0F4oDUGAyHmr4RGD+6/utl9bRWr9botWwJvVkElCHrPlIxfX9VO22KGUCUpWmFOskvgEtG1Bcj1zuBHgwhYugYZXI9+pX96jAueXc0SkB4DJIFUzA4NCsfP/zj8wtv+Z7CIZiZWfB4zvP0hnEYvL0dHvsnVUqoaSo3hHKC5725Ojtw5AS7gdRaRff1Mu+cXwsOPfJURtlkcEUHdzi9xvIXE69MaRAl43bMMTf9bjxVZuGCHnGBuzyIfbsguRNfdyw2D/iPLTdrl5dFKYCHWqKaYH1AgMBAAE=",
+      "spki_sha256": "44b1fe6a01678a76df72447ceae3abbeed381207a4d99972611e69ab54235755",
+      "sti": "http://uri.etsi.org/TrstSvc/Svctype/TSA/QTST",
+      "subject_der_sha256": "8a0e5ba1168bbe7fb0cf1b57c80972f00feb7daea6e91df83ebd13e05b5106d5",
+      "subject_str": "CN=ZETES TSP RSA Qualified TSU1,O=ZETES SA (VATBE-0408425626),C=BE",
+      "tsp_names": [
+        "Zetes S.A./N.V.",
+        "VATBE-0408425626",
+        "ZETES",
+        "ZETES SA (VATBE-0408425626)"
+      ]
+    },
+    {
+      "cc": "IT",
+      "history": [
+        [
+          "2016-06-28T14:18:40+00:00",
+          "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/accredited"
+        ],
+        [
+          "2016-06-30T22:00:00+00:00",
+          "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/withdrawn"
+        ],
+        [
+          "2016-07-01T00:00:01+00:00",
+          "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted"
+        ]
+      ],
+      "is_ca": true,
+      "ref": "IT:223:0004",
+      "spki_der_b64": "MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAn6vHP1OmiTTvV9f6lVF6E0C5mSUcujlujHDNSV5m1F3sbIIv97IWh9PtvwfPWFsMqOxcjM7p1hR6UvlyX0vIFn5czngGEIgKyIwktGCoLX09CqqDUPr1ypqRyVam2GZhyUZGiVAHL1JzcIxU+IRrxRnce7RpO2s3Ui/g81yNBsv4536mNmknjATqPM0upy0xe23onUEr2vT5B5gx+7qxiCAXtz+aVwk/9q1szH86Qe5y4a/gjXRfD2YpIZxPyUMZK3dPp/dhPZsltekzgfeoH60Rfj3k6USZBRNXNLCiRVj9jQ83cH3EvfPXtuV8HI+uJiqv6BfMRuxQpdxiWbpUL9mz4Z+jXNXOgN5dN/Z+veCNLZw/wB4P2rAj7l23cREM64fnLkhhcf+1/oNp20/ifYazRqMR/R44vBsDcOEq4HO9BUXHfoe8Rg+uusdesXYIMmIafo9t7nGCyz62+mHoViEyD4ZYlvLH3INrx4HlzinOqqYgY4/DeKP2XotBYrCkz0lb0+3qoJc71dCCmfJIOc6LgiK43Hgn4aJ0FI4YsuTwzvoZqkCoCkSs43n0mVMOyCMpu4BxfYsOr7e1pxf3iuJTGaxxhgq+Rib8ImKKp04IJT/VGSA5Hu0L0k04jhoVW/XRx6y+3gR91Y7uiWNRtjP67WpXy3u58TiyObSNzf8CAwEAAQ==",
+      "spki_sha256": "ffefb1b762c77ed6bbb3e9d0c894ec2c1cdb7eb4570878a982b9f4403887763f",
+      "sti": "http://uri.etsi.org/TrstSvc/Svctype/TSA/QTST",
+      "subject_der_sha256": "4abb62dbe29c080780a417421b7d255a6efbb419480a12400cca278fefaa4902",
+      "subject_str": "CN=InfoCert Qualified Time Stamping Authority 2,2.5.4.5=07945211006,OU=TSA,O=INFOCERT SPA,C=IT",
+      "tsp_names": [
+        "InfoCert S.p.A.",
+        "Infocert S.p.A.",
+        "Tinexta Infocert S.p.A.",
+        "INFOCERT SPA",
+        "VATIT-07945211006",
+        "InfoCert SpA"
+      ]
+    },
+    {
+      "cc": "FR",
+      "history": [
+        [
+          "2015-04-13T22:00:00+00:00",
+          "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/accredited"
+        ],
+        [
+          "2016-06-30T22:00:00+00:00",
+          "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/withdrawn"
+        ],
+        [
+          "2016-12-01T01:00:00+00:00",
+          "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted"
+        ],
+        [
+          "2019-04-03T00:00:00+00:00",
+          "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted"
+        ],
+        [
+          "2022-02-07T01:00:16+00:00",
+          "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted"
+        ],
+        [
+          "2025-01-29T23:00:00+00:00",
+          "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/withdrawn"
+        ]
+      ],
+      "is_ca": true,
+      "ref": "FR:180:0023",
+      "spki_der_b64": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2HNVSevVu9KI3sLSmwi2fj/GwwFSdaro84CGRL5teRmF+yafh5fa8MQXbMEmfEuQP8ftI+mDDhx9GfohpeuPftBhl9YHQLqL0CkobLy0sw/8GiDcZF101V6QFt1eHZwoHG96mlf6TvTU5P7HUScTPJVLVrg+0xAHy88+1HJeoAYw0wNBs/gLVJDVj3KHwlrg34kgzjqcisEsaL3XukkcB3U11yIgtg6YX3466++DLy29C2uSQFMJiSyB+No/364GXlpNePMCzMAVvpb6yCbT8+3hzbU5TX0C65piR1uJfsr07HSSQ7O0GLX8wUzYNc6lfHqP4R8RUxSfP0/cE5hDSQIDAQAB",
+      "spki_sha256": "e9b84c85456f38e066b044393ceb3383b8f19572ee6c4bda2e5a705299b25ec5",
+      "sti": "http://uri.etsi.org/TrstSvc/Svctype/TSA/QTST",
+      "subject_der_sha256": "7f82e373aea1078f5323294e9d6d024cb15033b5c002e80549b2c163caff5ee6",
+      "subject_str": "CN=Universign Timestamping CA 2015,OU=0002 43912916400026,O=Cryptolog International,C=FR",
+      "tsp_names": [
+        "Cryptolog International",
+        "VATFR-46439129164",
+        "Universign"
+      ]
+    },
+    {
+      "cc": "AT",
+      "history": [
+        [
+          "2015-06-29T13:00:00+00:00",
+          "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/accredited"
+        ],
+        [
+          "2016-06-30T22:00:00+00:00",
+          "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/withdrawn"
+        ]
+      ],
+      "is_ca": true,
+      "ref": "AT:75:0006",
+      "spki_der_b64": "MIICIDANBgkqhkiG9w0BAQEFAAOCAg0AMIICCAKCAgEAovNQHmUl2czvOJiwo/DoyVAp83eQlWQxf/waq6EM1mR8v/yVX1qWC0W0Mx32haF4JG3dD9rIVO049mXws2Gi9oCfGJj3y2soLcXWCiViRGj99VN45hFisZ4BiIljsP2m8JaYS8oBfrL8mktmAKf5YQyel96R2OpAPYdxM8mp1NAfhXKXCIkBSwF2PTlru66JFOFSkSg8GvTsZLF+h/aRFdYYX7JwCrqjIW1h3fimUOa3rPety5vdph7c+DQvMYPQKpf1EPy6ZaXnn4+kYJDXdXbC70d5sMkGf30wGN9vPXojH3X0FpdNGY8W7Ex/B1DX+S5MuAckZprsc/sAzXP8ujOZQfiyOrscfwTi2xM1h1ilL8CwAitt8Y+DQMSWvv1Y8t2Fz9KSK4ZY5zBAAGzd8+rnYTI8Sq6/yMBwUloUzcR2G0d1t5lV0Z0Fr0sJzjx0OyZjuYKZ5IaoUer5ctUsKHqcAdnvk84TBnjxy9K0jx9x8KLIYbX02pcq5cmHvEINGwNNrHcTX3OaFj8JxvrZE8ErF9tXLgxL6SC6zIzKSlDpOogB3/fNSQM3oHTTLVbQiUkV1WGkdYaSISSSs/Zf2oHNYxFyEpBzBpznRrI6QyJ+L9uend1A7FGjx6wZYBnCXp3QeUYH11q6SbIrHC3ml5KlSCUM05/qZsOjrpFj95ECAQM=",
+      "spki_sha256": "31155b6d6faccbcaf0cd5e1c77ff402c7fb604bf6e44fec8374503589bc745bd",
+      "sti": "http://uri.etsi.org/TrstSvc/Svctype/TSA/QTST",
+      "subject_der_sha256": "eac97b8187570a19c8f573417dbd9140eedbe1aefba9ae04139b7c0570da3dd9",
+      "subject_str": "CN=GLOBALTRUST QUALIFIED TIMESTAMP 1,OU=GLOBALTRUST Certification Service,O=e-commerce monitoring GmbH,L=Wien,ST=Wien,C=AT",
+      "tsp_names": [
+        "e-commerce monitoring GmbH",
+        "GLOBALTRUST",
+        "VATAT-U54992708"
+      ]
+    }
+  ],
+  "spec": "tg-attest/eutl-snapshot/1",
+  "territories": {
+    "AT": {
+      "bytes": 502447,
+      "issue_date": "2026-06-15T14:44:12Z",
+      "next_update": "2026-12-15T15:44:12Z",
+      "sequence_number": "75",
+      "service_count": 7,
+      "sha256": "f91bbd67a2bf913dfea5f35e9d3bf9157a1bac7d3d2377558ebf071e251e557b",
+      "signer_sha256": "5a05d58ab2bcede1affb73024de8796c8c299fb37f2e79036c7e09f45712abe6",
+      "tsl_version": "6",
+      "url": "https://www.signatur.rtr.at/vertrauensliste.xml"
+    },
+    "BE": {
+      "bytes": 718787,
+      "issue_date": "2026-06-15T15:00:00Z",
+      "next_update": "2026-12-15T16:00:00Z",
+      "sequence_number": "81",
+      "service_count": 20,
+      "sha256": "3d5b6572b82cbdbed9e019517c33d9e3356c2f6f257ca90f4a1b495082fcf5eb",
+      "signer_sha256": "fbec3a3b1bb26cd02e7737b9e3ea289caa7d45adf608265122ea0db3d1de66ce",
+      "tsl_version": "6",
+      "url": "https://tsl.belgium.be/tsl-be-v6.xml"
+    },
+    "FR": {
+      "bytes": 2545157,
+      "issue_date": "2026-08-05T07:31:24Z",
+      "next_update": "2027-02-05T08:31:24Z",
+      "sequence_number": "180",
+      "service_count": 159,
+      "sha256": "4e62a87d61365d60993184c7b94d03a6ff29f3f5cb93893d435b145dcabc4756",
+      "signer_sha256": "ccaba176a01b1ff6bbbe0071a4708ddf076601e9aaf2a3b6b6195a1aff5a037c",
+      "tsl_version": "6",
+      "url": "https://messervices.cyber.gouv.fr/visas/tl-fr_v6.xml"
+    },
+    "IT": {
+      "bytes": 2855744,
+      "issue_date": "2026-07-27T09:33:49Z",
+      "next_update": "2027-01-27T10:33:49Z",
+      "sequence_number": "223",
+      "service_count": 34,
+      "sha256": "209974ece2c641a202644eed56cffe84da20402e69276032c5c0cef464ef1b02",
+      "signer_sha256": "ddf02ac377a55fbda3709158a15fe1a10330743413ff1de72a91edb6ee285661",
+      "tsl_version": "6",
+      "url": "https://eidas.agid.gov.it/TL/TSL-IT.xml"
+    }
+  },
+  "unavailable": {
+    "IE": "下载失败 URLError: SSL CERTIFICATE_VERIFY_FAILED（真实构建中确实发生）"
+  },
+  "warnings": []
+}

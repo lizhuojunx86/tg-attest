@@ -189,9 +189,25 @@ class Anchor:
     # eIDAS 合格状态。见下方 DEFAULT_TSAS 的警告——这不是技术字段，是法律字段。
     # 关键在于必须记录*盖戳当时*的状态：合格资质可被暂停或撤销，验证时
     # 再去查已经晚了。这正是 TraceGuard 的 point-in-time 问题出现在信任层。
+    #
+    # 三值语义，与 verified_at_write 一致，不要用真值判断糊过去：
+    #   True  —— 查过了，盖戳当时在 EU 可信列表上且状态为 granted
+    #   False —— 查过了，不合格（不在列表上／状态非 granted／早于 eIDAS 适用日）
+    #   None  —— **没查**（没给快照／没装依赖／该国列表当次构建时取不到）
+    # 把"没查"记成"不合格"等于凭空造一个法律结论；把"确实不在列表上"
+    # 记成"没查"等于放弃一个本可确定的事实。两者都不接受。
+    #
+    # ⚠ 本组字段**不在 epoch_hash 的计算范围内**，因此不受时间戳保护。
+    #   原因是不变量 5：合格状态只有拿到 token（里面才有 TSA 签名证书）
+    #   之后才算得出来，而 epoch_hash 是被盖戳的**输入**，盖完再回写会让
+    #   刚取回的时间戳当场失效——tsa_token 当年踩的就是这个坑。
+    #   后果要说清楚：这三个字段是记录方的一项声明，可被事后修改而不留痕。
+    #   真正的可核验性来自 eutl_ref，审计方拿它自己去查可信列表复算。
+    #   把它纳入哈希的方案（写进下一个 epoch 的被哈希体）见 docs/eutl.md。
     tsa_qualified: bool | None = None
-    eutl_ref: str | None = None          # EU 可信列表条目标识
+    eutl_ref: str | None = None          # EU 可信列表条目标识 "国别:列表序号:序号"
     qualified_checked_at: str | None = None
+    qualified_reason: str | None = None  # 为什么是这个结论，尤其是 None 时
     # 写入时是否做过「这个 token 确实盖的是我提交的东西」的检查。
     #   True  —— 装了 [tsa]，messageImprint 与 nonce 回显都对上了
     #   False —— 检查跑了但没对上。响应被替换或 TSA 有问题，这个 anchor 不可用
@@ -247,6 +263,137 @@ def _inspect_token(token: bytes) -> tuple[str, int | None]:
     return tst["message_imprint"]["hashed_message"].native.hex(), tst["nonce"].native
 
 
+def _signer_cert_and_gentime(token: bytes):
+    """从 token 里取出签名证书的 DER 与 genTime。需要 asn1crypto。
+
+    取签名者用 issuer+serial 配对，不是只比 serial —— 序列号只在同一个
+    issuer 下唯一。verify.py 里犯过这个错（配不上时回退到 certs[0]，
+    也就是拿一张签名者从未声称过的证书去验签），这里不重犯：配不上就
+    返回 None，让调用方记成"未查"。
+    """
+    from asn1crypto import cms, tsp
+
+    sd = cms.ContentInfo.load(token)["content"]
+    tst = tsp.TSTInfo.load(sd["encap_content_info"]["content"].contents)
+    gen = tst["gen_time"].native
+
+    sid = sd["signer_infos"][0]["sid"]
+    want = key_id = None
+    if sid.name == "issuer_and_serial_number":
+        want = (sid.chosen["issuer"].dump(), sid.chosen["serial_number"].native)
+    else:
+        key_id = sid.chosen.native
+
+    for c in sd["certificates"]:
+        cert = c.chosen
+        if want is not None:
+            if (cert.issuer.dump(), cert.serial_number) == want:
+                return cert.dump(), gen
+        elif cert.key_identifier == key_id:
+            return cert.dump(), gen
+    return None, gen
+
+
+def _cert_facts(cert_der: bytes):
+    """把签名证书拆成 eutl.CertFacts。需要 cryptography。"""
+    import hashlib
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.x509.oid import NameOID
+
+    from .eutl import CertFacts
+
+    cert = x509.load_der_x509_certificate(cert_der)
+    spki = cert.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo)
+
+    def _one(oid):
+        vs = cert.subject.get_attributes_for_oid(oid)
+        return vs[0].value if vs else None
+
+    return CertFacts(
+        spki_sha256=hashlib.sha256(spki).hexdigest(),
+        subject_der_sha256=hashlib.sha256(cert.subject.public_bytes()).hexdigest(),
+        subject_str=cert.subject.rfc4514_string(),
+        issuer_der_sha256=hashlib.sha256(cert.issuer.public_bytes()).hexdigest(),
+        country=_one(NameOID.COUNTRY_NAME),
+        organization=_one(NameOID.ORGANIZATION_NAME),
+    ), cert
+
+
+def _issued_by(child):
+    """造一个回调：给定可信列表登记的 SPKI DER，验证 child 是否由它签发。
+
+    只做签名验证，不做完整 RFC 5280 路径校验。实测数据支持这个取舍：
+    列表里登记的要么是签时间戳的末端证书（路径长 0），要么是直接签发它的
+    CA（路径长 1，意大利全部如此）。更长的路径本实现不尝试，会落到
+    "未匹配"，这是**有意的保守**——宁可少判合格，不要多判。
+    """
+    def _cb(spki_der: bytes) -> bool:
+        try:
+            from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
+            from cryptography.hazmat.primitives.serialization import load_der_public_key
+            pub = load_der_public_key(spki_der)
+            sig, tbs = child.signature, child.tbs_certificate_bytes
+            algo = child.signature_hash_algorithm
+            if isinstance(pub, rsa.RSAPublicKey):
+                pub.verify(sig, tbs, padding.PKCS1v15(), algo)
+            elif isinstance(pub, ec.EllipticCurvePublicKey):
+                pub.verify(sig, tbs, ec.ECDSA(algo))
+            else:
+                return False
+            return True
+        except Exception:                        # noqa: BLE001
+            return False
+    return _cb
+
+
+def check_qualified(token: bytes, snapshot):
+    """判定这个 token 的 TSA 在**盖戳当时**是否为 eIDAS 合格服务。
+
+    返回 eutl.Verdict。缺依赖、缺快照、该国列表取不到，一律给
+    qualified=None（未查），绝不给 False —— 把"没查"记成"不合格"
+    等于凭空造出一个法律结论，而这个结论会被写进不可变的记录里。
+
+    关于 TS 119 615 PRO-4.7.4-06：规范要求在 genTime 与验证参考时刻各判
+    一次、两者不一致即 PROCESS_FAILED。写入时这两个时刻相差毫秒，必然
+    一致，所以这里只判一次。差异会在**以后**出现——那正是本字段存在的
+    理由：以后再判，判的是那时的列表，答案已经不是当时的答案了。
+    """
+    from .eutl import Snapshot, Verdict
+
+    if snapshot is None:
+        return Verdict(None, None, "未提供 EUTL 快照，未做合格性判定")
+    try:
+        snap = snapshot if isinstance(snapshot, Snapshot) else Snapshot.load(str(snapshot))
+    except Exception as e:                       # noqa: BLE001
+        return Verdict(None, None, f"EUTL 快照不可用：{type(e).__name__}: {e}")
+
+    try:
+        cert_der, gen = _signer_cert_and_gentime(token)
+    except ImportError:
+        return Verdict(None, None, "未安装 [tsa]，取不到签名证书，未做合格性判定")
+    except Exception as e:                       # noqa: BLE001
+        return Verdict(None, None, f"token 解析失败：{type(e).__name__}: {e}")
+    if cert_der is None:
+        return Verdict(None, None, "token 内找不到 SignerInfo 声称的签名证书，未做判定")
+    if gen is None:
+        return Verdict(None, None, "token 内没有 genTime，未做判定")
+
+    try:
+        facts, cert = _cert_facts(cert_der)
+    except ImportError:
+        return Verdict(None, None, "未安装 [tsa]，无法解析证书，未做合格性判定")
+    except Exception as e:                       # noqa: BLE001
+        return Verdict(None, None, f"证书解析失败：{type(e).__name__}: {e}")
+
+    if gen.tzinfo is None:
+        gen = gen.replace(tzinfo=timezone.utc)
+    return snap.qualified_at(facts, gen, verify_issued_by=_issued_by(cert))
+
+
 def _verify_at_write(token: bytes, expected_hash: str,
                      nonce: int | None) -> tuple[bool | None, str | None]:
     """写入时的最小校验：这个 token 盖的确实是我提交的东西吗？
@@ -278,7 +425,8 @@ def _verify_at_write(token: bytes, expected_hash: str,
 
 
 def anchor_hash(hex_hash: str, tsa_url: str, *, timeout: float = 10.0,
-                nonce: int | None = None, epoch_id: int = -1) -> Anchor:
+                nonce: int | None = None, epoch_id: int = -1,
+                eutl=None) -> Anchor:
     """把一个十六进制哈希提交给 TSA 取回时间戳 token。
 
     失败不抛异常，返回带 error 的 Anchor。理由见 AnchorQueue 的注释：
@@ -286,6 +434,12 @@ def anchor_hash(hex_hash: str, tsa_url: str, *, timeout: float = 10.0,
 
     装了 tg-attest[tsa] 时，返回前会顺手校验 messageImprint 与 nonce 回显，
     结果记在 verified_at_write 上。没装就跳过，功能不受影响。
+
+    eutl 传入 EUTL 快照（eutl.Snapshot 或快照文件路径）时，额外判定这家
+    TSA 在**盖戳当时**是否为 eIDAS 合格服务，结果记在 tsa_qualified /
+    eutl_ref / qualified_checked_at 上。不传就是三个 None（未查）。
+    快照怎么来见 eutl_build.build_snapshot()；查询本身零依赖、纯索引查找，
+    不会在热路径上发网络请求。
     """
     digest = bytes.fromhex(hex_hash)
     if nonce is None:
@@ -312,10 +466,22 @@ def anchor_hash(hex_hash: str, tsa_url: str, *, timeout: float = 10.0,
     verified, verr = _verify_at_write(token, hex_hash, nonce)
     if verified is False:
         log.error("anchor at %s failed write-time verification: %s", tsa_url, verr)
+
+    # 合格性判定。刻意放在写入时而不是验证时：合格资质会被暂停、撤销，
+    # TSP 每轮换一次密钥就是列表里一条状态时间线独立的新条目。以后再查，
+    # 查到的是那时的列表，回答的是另一个问题。
+    q = check_qualified(token, eutl)
+    if q.qualified is False:
+        log.info("anchor at %s: TSA 非 eIDAS 合格服务 —— %s", tsa_url, q.reason)
+
     return Anchor(status=status,
                   token_b64=base64.b64encode(token).decode(),
                   verified_at_write=verified,
                   error=verr,
+                  tsa_qualified=q.qualified,
+                  eutl_ref=q.ref,
+                  qualified_checked_at=q.checked_at,
+                  qualified_reason=q.reason,
                   **base)
 
 
@@ -331,10 +497,11 @@ class AnchorQueue:
     锚定的只有单笔金额极大或强监管的决策，用 force 单独处理。
     """
 
-    def __init__(self, tsa_urls: tuple[str, ...] = DEFAULT_TSAS) -> None:
+    def __init__(self, tsa_urls: tuple[str, ...] = DEFAULT_TSAS, *, eutl=None) -> None:
         self.tsa_urls = tsa_urls
         self.pending: list[tuple[int, str]] = []
         self.anchors: list[Anchor] = []
+        self.eutl = eutl
 
     def enqueue(self, epoch_id: int, epoch_hash: str) -> None:
         self.pending.append((epoch_id, epoch_hash))
@@ -345,7 +512,8 @@ class AnchorQueue:
             return None
         epoch_id, ehash = self.pending[-1]
         for url in self.tsa_urls:
-            a = anchor_hash(ehash, url, timeout=timeout, epoch_id=epoch_id)
+            a = anchor_hash(ehash, url, timeout=timeout, epoch_id=epoch_id,
+                            eutl=self.eutl)
             if a.ok:
                 self.anchors.append(a)
                 covered = [e for e, _ in self.pending]
