@@ -8,6 +8,35 @@ may break the API.
 
 ### Added
 
+- **锚定判定绑进哈希链（issue #3）。** `Ledger.attach_anchor()` 把一次锚定的结果
+  回写进对应 epoch，并把它的 eIDAS 合格判定排队；下一次 `seal_epoch()` 把判定写进
+  **下一个** epoch 的被哈希体，于是它随下一次锚定的时间戳一起被覆盖。改动判定的
+  任何一个字段，下一个 epoch 的时间戳就验不过。
+
+  为什么必须往后挪一格而不是就地写：判定要拿到 token（TSA 签名证书在里面）之后
+  才算得出来，而 `epoch_hash` 是**被盖戳的输入**。就地回写会让刚取回的时间戳当场
+  失效——`tsa_token` 受同一条约束，本项目在那上面已经踩过一次。
+
+  - 新增 `AnchorAttestation`，除判定本身还钉着 `anchored_hash`、`token_sha256`、
+    `eutl_snapshot_sha256`。只写 `epoch_id` 不够：判定说的是「那个 token 的签发者
+    当时合格」，不指明是哪个 token，换一个再声明一次同样说得通。
+  - `Ledger.verify()` 校验判定确实指向上一个 epoch 的实际哈希与实际存着的 token。
+    否则被哈希保护的只是一段改不动的自由文本，而不是关于这条链的陈述。
+  - `Ledger.unbound_anchor_count()` —— 判定已做出但尚未被任何 epoch 哈希覆盖的条数。
+    账本永远至少有一条悬空（最后那次），这是结构固有性质，必须可见。
+  - `export_bundle(..., include_binding=True)` 带上绑定 epoch 及其 token，
+    审计方才能自己验这条判定；判定尚未被覆盖时直接报错，不会悄悄导出一个
+    让人以为受保护而其实没有的包。默认不带，多一个 token 多几 KB。
+  - `verify_bundle` 校验绑定，结果进 `attestations`，**不进** `BUNDLE_REQUIRED_CHECKS`
+    ——是否合格是法律分类，不该决定披露包在技术上是否有效。
+  - `examples/e2e.py` 改用 `attach_anchor`，不再直接动 `Ledger._epochs`。
+
+  **向后兼容**：判定为 `None` 时整个键不出现在被哈希的字典里。`verify_bundle` 是拿
+  披露包里的 epoch 字典去构造 `EpochSeal` 的，新字段一旦带默认值参与哈希，0.1.0
+  时代那些不含此键的包会被补上一个 null、哈希改变，**每一个已发出的披露包当场
+  失效**。仓库里那份 0.1.0 披露包仍然验得过，有专门的测试盯着这一点。
+  反过来，判定存在却被删掉是查得出来的。
+
 - **eIDAS 合格状态，在盖戳当时记录（issue #2）。** `anchor_hash()` / `AnchorQueue`
   接受一份 EU 可信列表快照，判定这家 TSA 在 `genTime` 那一刻是否为合格时间戳服务，
   结果写进 `Anchor.tsa_qualified` / `eutl_ref` / `qualified_checked_at` /
@@ -52,10 +81,9 @@ may break the API.
 
 诚实记下，不当作已解决：
 
-- 合格状态**不受时间戳保护**。它不参与 `epoch_hash`——合格状态要拿到 token 才算得
-  出来，而 `epoch_hash` 是被盖戳的输入，回写会让时间戳当场失效（与 `tsa_token`
-  同一条约束）。因此这是记录方的一项声明，可被事后修改而不留痕。纳入哈希的方案
-  （写进下一个 epoch 的被哈希体）见 issue #3，留给 v0.3。
+- 最后一次锚定的判定永远悬空——还没有下一个 epoch 去哈希它。结构固有，
+  由 `Ledger.unbound_anchor_count()` 报出。不调用 `attach_anchor` 的用法同样
+  不受保护，那时判定仍只是一项声明。
 - 可信列表没有官方历史归档，审计方用今天的快照复算，与包内声明不一致时无法区分
   "资质变了"与"声明不实"。
 - TS 119 615 PRO-4.7.4-06 的双重判定本实现只做一次；证书无 `C=` 时降级为全表扫描。

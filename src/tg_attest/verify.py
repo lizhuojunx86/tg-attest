@@ -25,7 +25,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import timezone
 
 from asn1crypto import cms, tsp
@@ -384,7 +384,72 @@ def verify_bundle(bundle: dict, ca_bundle: bytes | None = None) -> VerifyResult:
     except Exception as e:                       # noqa: BLE001
         r.errors.append(f"{type(e).__name__}: {e}")
     _report_attestation(bundle, r)
+    _verify_binding(bundle, ca_bundle, r)
     return r.conclude(BUNDLE_REQUIRED_CHECKS)
+
+
+def _verify_binding(bundle: dict, ca_bundle: bytes | None, r: "VerifyResult") -> None:
+    """校验绑定 epoch：本 epoch 的锚定判定确实被下一个 epoch 的时间戳覆盖。
+
+    包里带了 binding_epoch 才做。做三件事：
+      1. binding_epoch 里那条判定说的确实是本 epoch 的那次锚定
+         （anchored_hash 对得上本 epoch 的 epoch_hash，token 摘要对得上）
+      2. binding_epoch 自己的 token 盖的确实是它自己的 epoch_hash
+      3. 于是那条判定的任何一个字段被改动，第 2 步都会失败
+
+    结果进 attestations 而不是 checks，理由和 #2 一样：是否合格是法律分类，
+    不该决定一个披露包在技术上是否有效。用非合格 TSA 的包完全有效，
+    只是举证责任在出具方那边。
+    """
+    be = bundle.get("binding_epoch")
+    if not isinstance(be, dict):
+        return
+    out: dict = {"tsa_qualified": None, "eutl_ref": None}
+    try:
+        att = be.get("prev_anchor_attestation")
+        if not att:
+            out["reason"] = "binding_epoch 里没有锚定判定"
+            r.attestations["⚠ 绑定校验"] = out
+            return
+
+        own = EpochSeal(**{**bundle["epoch"], "tsa_token": None}).epoch_hash()
+        if att.get("anchored_hash") != own:
+            out["reason"] = ("binding_epoch 里的判定指向的不是本 epoch"
+                             f"（判定说 {str(att.get('anchored_hash'))[:16]}…，"
+                             f"本 epoch 是 {own[:16]}…）")
+            r.attestations["⚠ 绑定校验"] = out
+            return
+
+        tok = bundle.get("tsa_token")
+        if tok and att.get("token_sha256"):
+            if hashlib.sha256(base64.b64decode(tok)).hexdigest() != att["token_sha256"]:
+                out["reason"] = "判定说的不是本包里这个 token"
+                r.attestations["⚠ 绑定校验"] = out
+                return
+
+        btok = bundle.get("binding_tsa_token")
+        if not btok:
+            out["reason"] = "binding_epoch 没有 token，那条判定同样没被盖戳"
+            r.attestations["⚠ 绑定校验"] = out
+            return
+
+        bhash = EpochSeal(**{**be, "tsa_token": None}).epoch_hash()
+        btr = verify_token(base64.b64decode(btok), bhash, ca_bundle)
+        r.attestations["eIDAS 合格状态（已被下一个 epoch 的时间戳覆盖）"] = {
+            "tsa_qualified": att.get("tsa_qualified"),
+            "eutl_ref": att.get("eutl_ref"),
+            "checked_at": att.get("qualified_checked_at"),
+            "eutl_snapshot_sha256": att.get("eutl_snapshot_sha256"),
+            "binding_verified": btr.ok,
+            "binding_gen_time": btr.gen_time,
+            "reason": ("这条判定参与了 binding_epoch 的哈希，而该哈希被上面这个"
+                       "时间戳签署，因此改动它会被查出来"
+                       if btr.ok else
+                       f"绑定时间戳未通过校验：{'; '.join(btr.errors) or '见 checks'}"),
+        }
+    except Exception as e:                       # noqa: BLE001
+        out["reason"] = f"绑定校验失败：{type(e).__name__}: {e}"
+        r.attestations["⚠ 绑定校验"] = out
 
 
 def _report_attestation(bundle: dict, r: "VerifyResult") -> None:
@@ -407,7 +472,7 @@ def _report_attestation(bundle: dict, r: "VerifyResult") -> None:
 
 
 def export_bundle(led, seq: int, path: str, *, allow_unanchored: bool = False,
-                  anchor=None) -> str:
+                  anchor=None, include_binding: bool = False) -> str:
     """导出自包含披露包。写盘的是纯 JSON，不含任何本库特有格式。
 
     没有 tsa_token 的 epoch 默认拒绝导出。这种包在 verify_bundle 那边
@@ -451,6 +516,25 @@ def export_bundle(led, seq: int, path: str, *, allow_unanchored: bool = False,
                 "保护，可被事后修改而不留痕。要独立复核，用 eutl_ref 到 "
                 "EU 可信列表自行查询，不要以本节为准。"),
         }
+
+    # 绑定 epoch（issue #3）。本 epoch 的锚定判定被写在**下一个** epoch 的
+    # 被哈希体里，所以要让审计方能自己验那条判定，包里必须带上下一个 epoch
+    # 及其 token。默认不带：多一个 token 就多几 KB，而大多数披露只关心
+    # 「这条记录当时存在」，不关心「盖戳的那家 TSA 当时合不合格」。
+    if include_binding:
+        nxt = next((e for e in led._epochs
+                    if e.epoch_id == b["epoch"]["epoch_id"] + 1), None)
+        if nxt is None or nxt.prev_anchor_attestation is None:
+            raise ValueError(
+                f"epoch {b['epoch']['epoch_id']} 的锚定判定还没有被任何 epoch "
+                "哈希覆盖（下一个 epoch 不存在或不带判定）。再封存并锚定一个 "
+                "epoch，或者不要传 include_binding=True。")
+        b["binding_epoch"] = {**asdict(nxt), "tsa_token": None}
+        b["binding_tsa_token"] = nxt.tsa_token
+        b["_verify"]["binding"] = (
+            "binding_epoch 的被哈希体里含有对本 epoch 那次锚定的判定，"
+            "而 binding_epoch 自己被 binding_tsa_token 盖了戳。改动那条判定的"
+            "任何字段都会让 binding_tsa_token 验不过。")
 
     with open(path, "w", encoding="utf-8") as f:
         # 不用 default=str。序列化不了的值应当当场抛错，而不是被悄悄

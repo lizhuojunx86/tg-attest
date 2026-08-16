@@ -97,13 +97,55 @@ $ python -m tg_attest.cli d.json --ca ca.pem --eutl his_own_snapshot.json
 
 签名格式是 enveloped XAdES。签名运算交给 `cryptography`（含 RSASSA-PSS，德国用的就是它），排除式 c14n 交给 `lxml`，本库只负责把 CID (EU) 2025/2164 附件第 3 点要求的引用/变换形状卡死：`URI=""` 的 Reference 恰好一个 Transforms、恰好两个 Transform、顺序为 enveloped-signature 然后 exc-c14n。**这条形状要求不是形式主义**——放任任意变换链，攻击者可以构造一个"只签了文档某个子集"的签名，摘要照样对得上，而被排除的那部分可以随便改。
 
+## 把判定绑进哈希链
+
+判定写在**下一个** epoch 的被哈希体里，因此受下一次锚定的时间戳保护。
+
+```python
+led.seal_epoch()                  # epoch N
+a = queue.flush()                 # 锚定 N，判定在这一步做出
+led.attach_anchor(a)              # 写回 token + 把判定排队
+led.unbound_anchor_count()        # 1：判定已做出，尚未被哈希覆盖
+
+led.append(...); led.seal_epoch() # epoch N+1，判定写进它的被哈希体
+led.unbound_anchor_count()        # 0
+queue.flush()                     # 锚定 N+1 —— 判定至此被时间戳覆盖
+```
+
+`AnchorAttestation` 里除了判定本身，还钉着 `anchored_hash`（被盖戳的那个
+`epoch_hash`）、`token_sha256`（被判定的那个 token）和 `eutl_snapshot_sha256`
+（判定依据的那份快照）。只写 `epoch_id` 是不够的：判定说的是「那个 token 的签发者
+当时合格」，不指明是哪个 token，换一个再声明一次同样说得通。`Ledger.verify()`
+会把这几项对回链上，对不上就报错——否则被哈希保护的只是「一段不会被改的自由
+文本」，保证了它没被改，没保证它说的是这条链上的事。
+
+导出时带上绑定 epoch，审计方才能自己验：
+
+```python
+export_bundle(led, seq, "d.json", anchor=a, include_binding=True)
+```
+
+默认不带。多一个 token 就多几 KB，而大多数披露只关心「这条记录当时存在」。
+判定还没被任何 epoch 覆盖时传 `include_binding=True` 会直接报错，不会悄悄
+导出一个让人以为受保护而其实没有的包。
+
+`verify_bundle` 会校验绑定，但结果放在 `attestations` 里，**不进** `BUNDLE_REQUIRED_CHECKS`：
+是否合格是法律分类，不该决定一个披露包在技术上是否有效。用非合格 TSA 的包完全
+有效，只是举证责任在出具方那边。
+
+**向后兼容**：判定为 `None` 时整个键不出现在被哈希的字典里，所以 0.1.0 时代那些
+不含此键的披露包哈希值完全不变，继续验得过。反过来，判定**存在**却被删掉是查得
+出来的——盖戳时的哈希含它，删掉后重算的不含它，两者不等。
+
 ## 这个功能防不住什么
 
 写在前面：以下每一条都是真的缺口，不是免责声明。
 
-**合格状态不受时间戳保护。** `tsa_qualified` / `eutl_ref` / `qualified_checked_at` 不参与 `epoch_hash` 的计算。原因是硬的：合格状态只有拿到 token（里面才有 TSA 签名证书）之后才算得出来，而 `epoch_hash` 是**被盖戳的输入**，盖完再回写会让刚取回的时间戳当场失效。这与 `tsa_token` 必须排除在外是同一条约束，本项目在那上面已经踩过一次。
+**合格状态默认不受保护，除非你把它绑进链里。** 判定不能写进被判定的那个 `epoch_hash`——合格状态要拿到 token（TSA 签名证书在里面）之后才算得出来，而 `epoch_hash` 是**被盖戳的输入**，盖完再回写会让刚取回的时间戳当场失效。这与 `tsa_token` 必须排除是同一条约束，本项目在那上面已经踩过一次。
 
-后果说清楚：这三个字段是记录方的一项**声明**，可被事后修改而不留痕。真正的可核验性来自 `eutl_ref`——审计方拿它自己去查可信列表复算。把它纳入哈希的方案（把 epoch N 的判定写进 epoch N+1 的被哈希体，随下一次锤定一起被盖戳）见 [issue #3](https://github.com/lizhuojunx86/tg-attest/issues/3)，留给 v0.3。
+办法是往后挪一格：`Ledger.attach_anchor()` 把判定排队，下一次 `seal_epoch()` 把它写进**下一个** epoch 的被哈希体，于是它随下一次锚定的时间戳一起被覆盖。做法见上面的[把判定绑进哈希链](#把判定绑进哈希链)。
+
+**但最后一次锚定的判定永远悬空。** 这是结构的固有性质，和「最后一批记录还没被封存」是同一回事。`Ledger.unbound_anchor_count()` 会把它报出来，要它归零就再封一个 epoch 并锚定。
 
 **可信列表没有官方历史归档。** 只有 LOTL 有 pivot 存档，成员国列表没有。今天下载的列表回答的是今天的问题。所以审计方用今天的快照复算出的结果与包内声明不一致时，可能是资质在这段时间里变了，也可能是声明不实，**工具区分不了**。要可复现，就在盖戳时把那份签名过的列表 XML 连同判定结果一起归档——快照里记了每份列表的 SHA-256 与序列号，正是为了让这件事可对账。
 

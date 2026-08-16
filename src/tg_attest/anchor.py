@@ -197,17 +197,24 @@ class Anchor:
     # 把"没查"记成"不合格"等于凭空造一个法律结论；把"确实不在列表上"
     # 记成"没查"等于放弃一个本可确定的事实。两者都不接受。
     #
-    # ⚠ 本组字段**不在 epoch_hash 的计算范围内**，因此不受时间戳保护。
-    #   原因是不变量 5：合格状态只有拿到 token（里面才有 TSA 签名证书）
-    #   之后才算得出来，而 epoch_hash 是被盖戳的**输入**，盖完再回写会让
-    #   刚取回的时间戳当场失效——tsa_token 当年踩的就是这个坑。
-    #   后果要说清楚：这三个字段是记录方的一项声明，可被事后修改而不留痕。
-    #   真正的可核验性来自 eutl_ref，审计方拿它自己去查可信列表复算。
-    #   把它纳入哈希的方案（写进下一个 epoch 的被哈希体）见 docs/eutl.md。
+    # ⚠ 本组字段不在**本** epoch 的 epoch_hash 里，也不可能在：合格状态要
+    #   拿到 token（TSA 签名证书在里面）之后才算得出来，而 epoch_hash 是被
+    #   盖戳的**输入**，盖完再回写会让刚取回的时间戳当场失效——tsa_token
+    #   当年踩的就是这个坑。
+    #
+    #   保护它的办法是往后挪一格：Ledger.attach_anchor() 把这组值排队，
+    #   下一次 seal_epoch() 写进**下一个** epoch 的被哈希体，于是它随下一次
+    #   锚定的时间戳一起被覆盖（issue #3）。因此：
+    #     · 走 attach_anchor + 再封一个 epoch 并锚定 → 受保护，改了查得出来
+    #     · 只拿着这个 Anchor 对象不往下走          → 仍然只是一项声明
+    #   两种状态的区别由 Ledger.unbound_anchor_count() 报出来，见 docs/eutl.md。
     tsa_qualified: bool | None = None
     eutl_ref: str | None = None          # EU 可信列表条目标识 "国别:列表序号:序号"
     qualified_checked_at: str | None = None
     qualified_reason: str | None = None  # 为什么是这个结论，尤其是 None 时
+    # 判定依据的那份 EUTL 快照的摘要。issue #3 把它一并绑进下一个 epoch 的
+    # 被哈希体：判定是相对某一份列表做出的，不指明是哪一份就无从复核。
+    eutl_snapshot_sha256: str | None = None
     # 写入时是否做过「这个 token 确实盖的是我提交的东西」的检查。
     #   True  —— 装了 [tsa]，messageImprint 与 nonce 回显都对上了
     #   False —— 检查跑了但没对上。响应被替换或 TSA 有问题，这个 anchor 不可用
@@ -482,6 +489,7 @@ def anchor_hash(hex_hash: str, tsa_url: str, *, timeout: float = 10.0,
                   eutl_ref=q.ref,
                   qualified_checked_at=q.checked_at,
                   qualified_reason=q.reason,
+                  eutl_snapshot_sha256=q.snapshot_sha256,
                   **base)
 
 

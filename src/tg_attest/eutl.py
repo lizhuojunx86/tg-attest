@@ -30,6 +30,7 @@ tg-attest.eutl —— EU 可信列表（EUTL）合格状态查询，**零外部�
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -116,6 +117,10 @@ class Verdict:
     ref: str | None
     reason: str
     checked_at: str | None = None
+    # 判定依据的那份快照的摘要。判定是相对某一份可信列表做出的，不记下是
+    # 哪一份，"当时查到的就是这个"就无从复核 —— 而可信列表没有官方历史归档，
+    # 这个摘要往往是唯一能把判定和一份具体数据对上的东西。
+    snapshot_sha256: str | None = None
 
     @property
     def checked(self) -> bool:
@@ -168,11 +173,17 @@ class Service:
 class Snapshot:
     """一份 EU 可信列表的时点快照。构建见 eutl_build.build_snapshot()。"""
 
-    def __init__(self, data: dict) -> None:
+    def __init__(self, data: dict, *, source_bytes: bytes | None = None) -> None:
         spec = data.get("spec")
         if spec != SNAPSHOT_SPEC:
             raise SnapshotError(f"快照 spec 不认识：{spec!r}，期望 {SNAPSHOT_SPEC!r}")
         self.data = data
+        # 有原始字节就哈希原始字节；没有（直接用 dict 构造）就哈希规范化后的
+        # JSON。两条路给出的值不同，但各自稳定，而写进记录的是构造时的那一个。
+        self.sha256: str = hashlib.sha256(
+            source_bytes if source_bytes is not None
+            else json.dumps(data, sort_keys=True, ensure_ascii=False,
+                            separators=(",", ":")).encode("utf-8")).hexdigest()
         self.built_at: str = data["built_at"]
         self.lotl: dict = data.get("lotl", {})
         self.territories: dict = data.get("territories", {})
@@ -199,12 +210,13 @@ class Snapshot:
 
     @classmethod
     def load(cls, path: str) -> "Snapshot":
-        with open(path, encoding="utf-8") as f:
-            return cls(json.load(f))
+        with open(path, "rb") as f:
+            raw = f.read()
+        return cls(json.loads(raw.decode("utf-8")), source_bytes=raw)
 
     @classmethod
     def loads(cls, s: str) -> "Snapshot":
-        return cls(json.loads(s))
+        return cls(json.loads(s), source_bytes=s.encode("utf-8"))
 
     # ---- 查询 ----
 
@@ -248,6 +260,7 @@ class Snapshot:
         时间戳的末端证书，只做直接匹配的实现对意大利会 100% 漏判。
         """
         checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        snap_id = self.sha256
 
         # --- PRO-4.6.4-01：硬闸 -------------------------------------------
         if at < EIDAS_EPOCH:
@@ -256,7 +269,7 @@ class Snapshot:
                 f"genTime {at.isoformat()} 早于 eIDAS 适用日 "
                 f"{EIDAS_EPOCH.isoformat()}，当时不存在合格时间戳这一法律概念"
                 "（TS 119 615 PRO-4.6.4-01）",
-                checked_at)
+                checked_at, snap_id)
 
         # --- PRO-4.6.4-02：选定成员国 -------------------------------------
         cc = _CC_REMAP.get((facts.country or "").upper(), (facts.country or "").upper())
@@ -274,13 +287,13 @@ class Snapshot:
             scanned_globally = True
         else:
             return Verdict(None, None,
-                           f"快照未覆盖成员国 {cc or '(证书无 C=)'}，未做判定", checked_at)
+                           f"快照未覆盖成员国 {cc or '(证书无 C=)'}，未做判定", checked_at, snap_id)
 
         # 该国列表当次构建时就没取到 → 未查，不是不合格
         if cc in self.unavailable and not scanned_globally:
             return Verdict(None, None,
                            f"{cc} 的可信列表在快照构建时不可用"
-                           f"（{self.unavailable[cc]}），未做判定", checked_at)
+                           f"（{self.unavailable[cc]}），未做判定", checked_at, snap_id)
 
         # --- 匹配服务条目 --------------------------------------------------
         hits: list[tuple[Service, str]] = []
@@ -308,7 +321,7 @@ class Snapshot:
                 f"在{where}范围内未找到匹配的 {QTST_STI} 条目"
                 f"（subject={facts.subject_str[:80]}）"
                 "（TS 119 615 PRO-4.6.4-05）",
-                checked_at)
+                checked_at, snap_id)
 
         # --- 取 at 时刻的状态 ----------------------------------------------
         statuses = {}
@@ -326,7 +339,7 @@ class Snapshot:
                 False, s.ref,
                 f"{at.isoformat()} 时该条目状态为 {st or '(早于最早一条历史记录)'}"
                 f"，非 granted{note}",
-                checked_at)
+                checked_at, snap_id)
 
         if len({s.ref for s, _, _ in granted}) > 1:
             # PRO-4.6.4-06：多条命中且结论不一致 → Indeterminate。
@@ -346,11 +359,11 @@ class Snapshot:
                     f"证书 O={facts.organization!r} 与可信列表的 TSP 名称"
                     f"{list(svc.tsp_names)[:3]} 不匹配，判定不确定"
                     "（TS 119 615 PRO-4.6.4-08）",
-                    checked_at)
+                    checked_at, snap_id)
 
         suffix = "，经全表扫描匹配（证书 C= 未能定位到成员国，为对规范的有意偏离）" \
             if scanned_globally else ""
         return Verdict(
             True, svc.ref,
             f"{at.isoformat()} 时状态为 granted（{how} 匹配，{svc.cc}）{suffix}",
-            checked_at)
+            checked_at, snap_id)
