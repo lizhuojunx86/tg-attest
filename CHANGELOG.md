@@ -6,8 +6,35 @@ may break the API.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.1] — 2026-08-18
+
+Documentation only. No code changed, and the verification behaviour is identical to 0.1.0.
+This version exists because the description rendered on PyPI for 0.1.0 carries claims that are
+no longer true, and PyPI will not let a released description be edited in place. A project whose
+whole argument is "do not trust me, check it" cannot leave a wrong regulatory date on the page
+`pip install` sends people to.
+
 ### Documentation corrections
 
+- **EU AI Act Article 12 applies from 2027-12-02, not 2026-08-02.** The Digital Omnibus on AI
+  (Regulation (EU) 2026/1744, published in the Official Journal 2026-07-24, in force
+  2026-07-27) moved the Chapter III obligations for Annex III standalone high-risk systems back
+  by sixteen months, and those for Annex I embedded systems to 2028-08-02. What did take effect
+  on 2026-08-02 is the Article 50 transparency regime, not record-keeping. The old date was
+  correct when written and stopped being correct on 2026-07-27. Corrected in `README.md`,
+  `docs/article12.md`, and two rows of `docs/claims-evidence.md`.
+- The README's field-evidence paragraph now names the file the two revision rates come out of —
+  `analysis/data/eps_revision_qt_pit_2026h1.csv` in the TraceGuard repo, 2,163 rows, sha256
+  pinned in `manifest.json` alongside the decision rule and the threshold sensitivity table —
+  rather than only linking the method write-up. Anyone arriving to check 41.4% should land on
+  the data, not on a search.
+- "15.3% **of those**" → "15.3% of the 2,163". The earlier wording made the 896 differing
+  records the denominator, which is a different and smaller quantity: 332 records flip, not 137.
+  Fixed in the repository on 2026-08-09; this is the first release that carries the fix to PyPI.
+- "flip a trading decision" → "flip a long-entry decision", the wording the TraceGuard README
+  uses for the same measurement. Two repositories quoting one number should quote it identically.
 - `docs/claims-evidence.md` claimed nine required bundle checks. There are ten — the
   integrity-profile check took the count from nine to ten when it was added, the README was
   updated and this table was not. `len(BUNDLE_REQUIRED_CHECKS) == 10`. The table carries its own
@@ -168,5 +195,6 @@ Five claims in the README were corrected in the direction of claiming less. See
 - "uses nothing but the standard library" — requires nothing but; will use `asn1crypto` for the
   write-time check if it is already installed.
 
-[Unreleased]: https://github.com/lizhuojunx86/tg-attest/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/lizhuojunx86/tg-attest/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/lizhuojunx86/tg-attest/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/lizhuojunx86/tg-attest/releases/tag/v0.1.0
