@@ -1,6 +1,9 @@
 # EU AI Act Article 12 — what this library covers and what it doesn't
 
-Article 12 (record-keeping) has applied to high-risk systems since 2026-08-02. This document maps
+Article 12 (record-keeping) applies to high-risk systems from 2027-12-02, moved back from
+2026-08-02 by the Digital Omnibus (Regulation (EU) 2026/1744, in force 2026-07-27); high-risk
+systems embedded in products under Annex I follow on 2028-08-02. What did take effect on
+2026-08-02 is the Article 50 transparency regime, not this one. This document maps
 its requirements onto what `tg-attest` actually does. The point of the document is the second column.
 A compliance library that claims to cover everything is a liability, because the gaps are still
 there — you just find them during the audit instead of during procurement.
