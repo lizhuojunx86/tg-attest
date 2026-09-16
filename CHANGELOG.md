@@ -6,6 +6,8 @@ may break the API.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-16
+
 ### Added
 
 - **锚定判定绑进哈希链（issue #3）。** `Ledger.attach_anchor()` 把一次锚定的结果
