@@ -6,7 +6,9 @@ may break the API.
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-09-16
+## [0.2.1] - 2026-09-16
+
+0.2.0 was tagged before its CHANGELOG section existed; the repository rules do not allow moving a tag, so that version number is burned and this release carries its content.
 
 ### Added
 
