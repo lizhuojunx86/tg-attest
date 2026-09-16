@@ -6,9 +6,7 @@ may break the API.
 
 ## [Unreleased]
 
-## [0.2.1] - 2026-09-16
-
-0.2.0 was tagged before its CHANGELOG section existed; the repository rules do not allow moving a tag, so that version number is burned and this release carries its content.
+## [0.2.2] - 2026-09-16
 
 ### Added
 
@@ -100,6 +98,18 @@ may break the API.
   updated and this table was not. `len(BUNDLE_REQUIRED_CHECKS) == 10`. The table carries its own
   standing rule to re-check whenever the README changes, and that rule was not followed, so the
   row records the miss rather than quietly reading correctly.
+
+## [0.2.1] - 2026-09-16 [not released]
+
+Tagged while recovering from the 0.2.0 mistake, and burned by the next gate in
+line: tests/test_version.py requires every git tag to have a CHANGELOG section,
+and v0.2.0 had none at this tag's tree. Nothing was published.
+
+## [0.2.0] - 2026-09-16 [not released]
+
+Tagged before its CHANGELOG section existed. The release gate refused to
+publish, and tag protection refuses the deletion, so the number is burned.
+Nothing was published. The content described below shipped as 0.2.2.
 
 ## [0.1.0] — 2026-08-05
 
