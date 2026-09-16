@@ -17,7 +17,6 @@ from pathlib import Path
 from tg_attest import (
     AnchorQueue,
     DecisionRecord,
-    EpochSeal,
     EvidenceRef,
     GateVerdict,
     Ledger,
@@ -84,9 +83,11 @@ def main(outdir: Path) -> int:
     if anchor and anchor.ok:
         tsr = outdir / "epoch_000.tsr"
         anchor.write_token(str(tsr))
-        # 回写 token。epoch_hash 排除 tsa_token，所以这一步不会改变刚被签名的哈希——
+        # 回写 token。用 attach_anchor 而不是直接动 _epochs：它同时把这次锚定的
+        # eIDAS 合格判定排队，交给下一个 seal_epoch 写进下一个 epoch 的被哈希体
+        # （issue #3）。epoch_hash 排除 tsa_token，所以这一步不会改变刚被签名的哈希——
         # 若不排除，这里就会当场作废掉刚取回的时间戳。
-        led._epochs[0] = EpochSeal(**{**asdict(seal), "tsa_token": anchor.token_b64})
+        led.attach_anchor(anchor)
         assert led._epochs[0].epoch_hash() == seal.epoch_hash()
 
         print(f"  {anchor.tsa_url} 签发，{len(anchor.token_bytes())} 字节 → {tsr.name}")
@@ -136,7 +137,7 @@ def main(outdir: Path) -> int:
         print(f"  锚定失败：{a2.error if a2 else 'no tsa'}")
         return 1
 
-    led2._epochs[0] = EpochSeal(**{**asdict(s2), "tsa_token": a2.token_b64})
+    led2.attach_anchor(a2)
     path = outdir / "decision_0000.json"
     export_bundle(led2, 0, str(path))
     print(f"  {path} — {path.stat().st_size} 字节，自包含")

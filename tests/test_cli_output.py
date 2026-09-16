@@ -211,9 +211,15 @@ def test_json_shape_on_success(good):
     r = run_cli(path, "--ca", ca, "--json")
     assert r.returncode == 0
     p = json.loads(r.stdout)
-    assert set(p) == {"ok", "checks", "missing", "gen_time", "tsa", "errors"}
+    assert set(p) == {"ok", "checks", "missing", "gen_time", "tsa", "errors",
+                      "attestations"}
     assert p["ok"] is True
+    # attestations 与 checks 分开放，且**不**参与 ok 的计算。
+    # 记录方声明的 eIDAS 合格状态不受时间戳保护，性质与其余每一项检查都不同；
+    # 而且「是否合格」是法律分类，不该成为技术验证的通过条件——用非合格 TSA
+    # 的包在技术上完全有效，只是举证责任在出具方那边（41(1) 对 41(2)）。
     assert set(p["checks"]) == set(BUNDLE_REQUIRED_CHECKS)
+    assert not any("合格" in c for c in BUNDLE_REQUIRED_CHECKS)
     assert all(v is True for v in p["checks"].values())
     assert p["missing"] == []
     assert p["errors"] == []

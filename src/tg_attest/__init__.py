@@ -18,6 +18,7 @@ tests/test_zero_deps.py 把这条钉死了。
 from __future__ import annotations
 
 from .anchor import AnchorQueue, anchor_hash
+from .eutl import CertFacts, Snapshot, Verdict  # noqa: F401
 from .record import DecisionRecord, EpochSeal, EvidenceRef, GateVerdict, Ledger
 
 # 版本号从已安装的包元数据读，唯一来源是 git tag（见 pyproject 的
@@ -41,6 +42,10 @@ __all__ = [
     "EpochSeal",
     "anchor_hash",
     "AnchorQueue",
+    # EUTL 合格状态查询：零依赖，随写入路径一起立即可用
+    "Snapshot",
+    "Verdict",
+    "CertFacts",
     # 验证路径：需要 tg-attest[tsa]，延迟导入
     "verify_token",
     "verify_bundle",

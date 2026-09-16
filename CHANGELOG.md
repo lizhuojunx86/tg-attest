@@ -6,6 +6,89 @@ may break the API.
 
 ## [Unreleased]
 
+### Added
+
+- **锚定判定绑进哈希链（issue #3）。** `Ledger.attach_anchor()` 把一次锚定的结果
+  回写进对应 epoch，并把它的 eIDAS 合格判定排队；下一次 `seal_epoch()` 把判定写进
+  **下一个** epoch 的被哈希体，于是它随下一次锚定的时间戳一起被覆盖。改动判定的
+  任何一个字段，下一个 epoch 的时间戳就验不过。
+
+  为什么必须往后挪一格而不是就地写：判定要拿到 token（TSA 签名证书在里面）之后
+  才算得出来，而 `epoch_hash` 是**被盖戳的输入**。就地回写会让刚取回的时间戳当场
+  失效——`tsa_token` 受同一条约束，本项目在那上面已经踩过一次。
+
+  - 新增 `AnchorAttestation`，除判定本身还钉着 `anchored_hash`、`token_sha256`、
+    `eutl_snapshot_sha256`。只写 `epoch_id` 不够：判定说的是「那个 token 的签发者
+    当时合格」，不指明是哪个 token，换一个再声明一次同样说得通。
+  - `Ledger.verify()` 校验判定确实指向上一个 epoch 的实际哈希与实际存着的 token。
+    否则被哈希保护的只是一段改不动的自由文本，而不是关于这条链的陈述。
+  - `Ledger.unbound_anchor_count()` —— 判定已做出但尚未被任何 epoch 哈希覆盖的条数。
+    账本永远至少有一条悬空（最后那次），这是结构固有性质，必须可见。
+  - `export_bundle(..., include_binding=True)` 带上绑定 epoch 及其 token，
+    审计方才能自己验这条判定；判定尚未被覆盖时直接报错，不会悄悄导出一个
+    让人以为受保护而其实没有的包。默认不带，多一个 token 多几 KB。
+  - `verify_bundle` 校验绑定，结果进 `attestations`，**不进** `BUNDLE_REQUIRED_CHECKS`
+    ——是否合格是法律分类，不该决定披露包在技术上是否有效。
+  - `examples/e2e.py` 改用 `attach_anchor`，不再直接动 `Ledger._epochs`。
+
+  **向后兼容**：判定为 `None` 时整个键不出现在被哈希的字典里。`verify_bundle` 是拿
+  披露包里的 epoch 字典去构造 `EpochSeal` 的，新字段一旦带默认值参与哈希，0.1.0
+  时代那些不含此键的包会被补上一个 null、哈希改变，**每一个已发出的披露包当场
+  失效**。仓库里那份 0.1.0 披露包仍然验得过，有专门的测试盯着这一点。
+  反过来，判定存在却被删掉是查得出来的。
+
+- **eIDAS 合格状态，在盖戳当时记录（issue #2）。** `anchor_hash()` / `AnchorQueue`
+  接受一份 EU 可信列表快照，判定这家 TSA 在 `genTime` 那一刻是否为合格时间戳服务，
+  结果写进 `Anchor.tsa_qualified` / `eutl_ref` / `qualified_checked_at` /
+  `qualified_reason`。三个字段此前只有定义，从未被填过。
+
+  为什么是盖戳当时：合格资质会被暂停、撤销，TSP 每轮换一次密钥就是列表里一条
+  状态时间线独立的新条目。同一个问题在不同时刻问会得到不同答案，而只有盖戳那一刻
+  的答案是对的。这是本库自己的 point-in-time 命题出现在它的信任根上。
+
+  - `tg_attest.eutl` —— 查询，**零依赖**，跑在写入路径上，已纳入
+    `test_zero_deps.py` 的静态检查范围。判定不发网络请求。
+  - `tg_attest.eutl_build` —— 快照构建，需要新的 `[eutl]` 额外依赖
+    （`lxml`，只用来做排除式 c14n）。`python -m tg_attest.eutl_build -o snap.json`。
+  - 判定实现 ETSI TS 119 615 V1.3.1 第 4.6/4.7 节，逐条对应条款，见
+    [`docs/eutl.md`](docs/eutl.md)。
+  - 信任根是 OJ C/2026/1944 公布的 6 个证书摘要，钉在代码里。选择钉摘要而不是
+    钉证书，是为了让信任根小到能用眼睛和官方公报核对。
+  - `export_bundle(..., anchor=a)` 把声明写进披露包；`verify_bundle` 如实转述但
+    **不**纳入必需检查清单；`cli --eutl` 用审计方自己的快照独立复算并报告不一致。
+
+  三值语义与 `verified_at_write` 一致：`None` 是"没查"，不是"不合格"。把一次网络
+  故障固化成法律结论是这个功能最危险的失败方式——爱尔兰在实测构建中确实取不到。
+
+### Fixed
+
+- **enveloped-signature 变换吃掉了 Signature 后面的文本节点。** 该变换省略的是
+  Signature 元素及其子树，不包括紧跟其后的文本；`lxml` 的 `remove()` 连 `tail`
+  一起删。签名者把换行放在 `Signature.tail` 上的列表（荷兰）因此摘要对不上、
+  验签失败，而放在前一个兄弟节点 `tail` 上的（德国、奥地利）删不删都一样。
+  同一份代码在一部分成员国上静默失败，症状看起来像对方列表有问题。
+  回归测试 `test_the_enveloped_transform_must_not_eat_the_tail` 覆盖三种 tail 形态，
+  已验证把修复退回原状时该测试失败。
+
+### Changed
+
+- `cli --json` 的输出多了一个 `attestations` 键。它与 `checks` 分开，**不**参与
+  `ok` 的计算：合格状态不受时间戳保护，性质与其余检查不同；而且「是否合格」是
+  法律分类，不该成为技术验证的通过条件——用非合格 TSA 的包在技术上完全有效，
+  只是举证责任在出具方那边。严格按键集合解析 `--json` 的调用方需要跟一下。
+
+### Known gaps
+
+诚实记下，不当作已解决：
+
+- 最后一次锚定的判定永远悬空——还没有下一个 epoch 去哈希它。结构固有，
+  由 `Ledger.unbound_anchor_count()` 报出。不调用 `attach_anchor` 的用法同样
+  不受保护，那时判定仍只是一项声明。
+- 可信列表没有官方历史归档，审计方用今天的快照复算，与包内声明不一致时无法区分
+  "资质变了"与"声明不实"。
+- TS 119 615 PRO-4.7.4-06 的双重判定本实现只做一次；证书无 `C=` 时降级为全表扫描。
+  两处都是对规范的有意偏离，写在 `docs/eutl.md` 里而不是藏在实现里。
+
 ### Documentation corrections
 
 - `docs/claims-evidence.md` claimed nine required bundle checks. There are ten — the

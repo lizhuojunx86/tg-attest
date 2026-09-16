@@ -15,9 +15,10 @@ tg-attest: 面向 AI 辅助决策的防篡改决策记录层。
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
@@ -307,6 +308,36 @@ def verify_inclusion(record_hash: str, proof: list[tuple[str, str]], root: str) 
 
 
 @dataclass(frozen=True)
+class AnchorAttestation:
+    """对**上一个** epoch 那次锚定的判定，写进本 epoch 的被哈希体。
+
+    为什么必须挪到下一个 epoch 才能被哈希（这是 issue #3 的全部内容）：
+        eIDAS 合格状态只有拿到 token 之后才算得出来——TSA 的签名证书在
+        token 里面。而 epoch N 的 epoch_hash 是**被盖戳的输入**，盖完再
+        往里写任何东西，刚取回的那个时间戳当场失效。tsa_token 受同一条
+        约束，本项目在那上面已经踩过一次（见 0.1.0 的 CHANGELOG）。
+
+        但 epoch 根本来就串链。把 epoch N 的判定写进 epoch N+1 的被哈希体，
+        它就随 N+1 那次锚定一起被时间戳覆盖了。代价是迟一个 epoch 生效，
+        以及最后一个 epoch 的判定永远悬空——见 Ledger.unbound_anchor_count()。
+
+    anchored_hash 与 token_sha256 一起把这条判定钉死在**那一次**锚定上。
+    只写 epoch_id 是不够的：判定说的是「那个 token 的签发者当时合格」，
+    不指明是哪个 token，换一个 token 再声明一次同样说得通。
+    """
+    epoch_id: int
+    anchored_hash: str                  # 被盖戳的那个 epoch_hash
+    tsa_url: str
+    token_sha256: str | None            # 被判定的那个 token 的摘要
+    tsa_qualified: bool | None
+    eutl_ref: str | None
+    qualified_checked_at: str | None
+    eutl_snapshot_sha256: str | None    # 判定依据的那份快照
+    # 刻意不收 qualified_reason：那是给人看的说明文字，措辞会随实现变化，
+    # 放进哈希等于把一句人话变成兼容性契约。
+
+
+@dataclass(frozen=True)
 class EpochSeal:
     """一个封存周期。epoch 根之间再串成链，形成两级结构。"""
     epoch_id: int
@@ -316,13 +347,27 @@ class EpochSeal:
     prev_epoch_hash: str
     sealed_at: str
     tsa_token: str | None = None      # RFC 3161 时间戳，锚定成功后回写
+    # 上一个 epoch 的锚定判定。参与本 epoch 的哈希，因此受本 epoch 的
+    # 时间戳保护——这正是它放在这里而不是放在被判定的那个 epoch 里的原因。
+    prev_anchor_attestation: "AnchorAttestation | None" = None
 
     def epoch_hash(self) -> str:
         """必须排除 tsa_token——它是锚定的*结果*，不能参与被锚定的*输入*，
         否则回写 token 会改变哈希，令刚取回的时间戳立即失效。
-        同理 record_hash 也不参与自身计算。这类自指是哈希链最隐蔽的一类 bug。"""
+        同理 record_hash 也不参与自身计算。这类自指是哈希链最隐蔽的一类 bug。
+
+        prev_anchor_attestation 为 None 时**整个键不出现**，而不是出现一个
+        null。这不是洁癖：verify_bundle 是拿披露包里的 epoch 字典去构造
+        EpochSeal 的，字段有了默认值之后，0.1.0 时代那些不含此键的包会被
+        补上一个 null，哈希随之改变，于是每一个已经发出去的披露包当场失效。
+        新增字段而不惊动旧数据，只有这一种写法。
+        （反过来，判定**存在**时被删掉是查得出来的：盖戳时的哈希含它，
+        删掉后重算的哈希不含它，两者不等，messageImprint 对不上。）
+        """
         d = asdict(self)
         d.pop("tsa_token")
+        if d.get("prev_anchor_attestation") is None:
+            d.pop("prev_anchor_attestation", None)
         return hash_obj(d)
 
 
@@ -342,6 +387,8 @@ class Ledger:
     def __init__(self) -> None:
         self._records: list[DecisionRecord] = []
         self._epochs: list[EpochSeal] = []
+        # 等待被下一个 epoch 哈希覆盖的锚定判定。见 attach_anchor()。
+        self._pending_attestation: AnchorAttestation | None = None
 
     # ---- 写入 ----
     def append(self, *, actor: dict, model: dict, inputs: Any, output: Any,
@@ -424,6 +471,32 @@ class Ledger:
                 problems.append(f"epoch {e.epoch_id}: Merkle 根不匹配")
             if e.prev_epoch_hash != prev_e:
                 problems.append(f"epoch {e.epoch_id}: 周期链断裂")
+
+            # 锚定判定必须确实说的是上一个 epoch 的那次锚定。
+            # 不校验的话，这段结构就只是"一段被哈希保护的自由文本"——
+            # 保证了它没被改，没保证它说的是这条链上的事。
+            a = e.prev_anchor_attestation
+            if a is not None:
+                if e.epoch_id == 0:
+                    problems.append("epoch 0: 之前没有 epoch，不应携带锚定判定")
+                else:
+                    prev_seal = self._epochs[e.epoch_id - 1]
+                    if a.epoch_id != prev_seal.epoch_id:
+                        problems.append(
+                            f"epoch {e.epoch_id}: 锚定判定指向 epoch {a.epoch_id}，"
+                            f"应为 {prev_seal.epoch_id}")
+                    elif a.anchored_hash != prev_seal.epoch_hash():
+                        # 上一个 epoch 被改过，或者这条判定是从别处搬来的。
+                        problems.append(
+                            f"epoch {e.epoch_id}: 锚定判定里的 anchored_hash "
+                            f"与 epoch {a.epoch_id} 的实际哈希不符")
+                    if (a.token_sha256 and prev_seal.tsa_token
+                            and a.token_sha256 != hashlib.sha256(
+                                base64.b64decode(prev_seal.tsa_token)).hexdigest()):
+                        problems.append(
+                            f"epoch {e.epoch_id}: 锚定判定说的不是 epoch "
+                            f"{a.epoch_id} 里存着的那个 token")
+
             prev_e = e.epoch_hash()
             expect_start = e.end_seq + 1
         return problems
@@ -439,6 +512,56 @@ class Ledger:
         return max(0, len(self._records) - covered)
 
     # ---- 封存 ----
+    def attach_anchor(self, anchor) -> None:
+        """把一次锚定的结果回写进对应的 epoch。
+
+        做两件事：
+          1. 把 token 写回 epoch.tsa_token（此前调用方只能自己去动 _epochs，
+             那是内部结构，不该是公开用法）；
+          2. 把这次锚定的 eIDAS 合格判定排队，交给**下一个** seal_epoch()
+             写进它的被哈希体，从而被下一次锚定的时间戳覆盖。
+
+        第 2 步为什么不能就地写进本 epoch：本 epoch 的 epoch_hash 已经被盖过
+        戳了，往里加任何东西都会让那个时间戳失效。见 AnchorAttestation 的注释。
+
+        anchor 未成功（.ok 为假）时只排队判定、不写 token —— 一个失败的锚定
+        没有 token 可写，但"这次尝试打到的 TSA 不合格"仍然是一条值得留痕的事实。
+        """
+        idx = next((i for i, e in enumerate(self._epochs)
+                    if e.epoch_id == anchor.epoch_id), None)
+        if idx is None:
+            raise ValueError(f"epoch {anchor.epoch_id} 不在本账本内")
+
+        if anchor.token_b64:
+            self._epochs[idx] = replace(self._epochs[idx], tsa_token=anchor.token_b64)
+
+        token_sha = None
+        if anchor.token_b64:
+            token_sha = hashlib.sha256(anchor.token_bytes()).hexdigest()
+        self._pending_attestation = AnchorAttestation(
+            epoch_id=anchor.epoch_id,
+            anchored_hash=anchor.anchored_hash,
+            tsa_url=anchor.tsa_url,
+            token_sha256=token_sha,
+            tsa_qualified=anchor.tsa_qualified,
+            eutl_ref=anchor.eutl_ref,
+            qualified_checked_at=anchor.qualified_checked_at,
+            eutl_snapshot_sha256=getattr(anchor, "eutl_snapshot_sha256", None),
+        )
+
+    def unbound_anchor_count(self) -> int:
+        """已排队但还没被任何 epoch 哈希覆盖的锚定判定条数（0 或 1）。
+
+        与 unsealed_count() 是同一类指标，量的是另一个暴露窗口：判定已经做出，
+        但还没有被时间戳保护，此刻它仍然可以被改而不留痕。再封一个 epoch
+        并锚定它，这个窗口就关上了。
+
+        账本永远至少有一次锚定判定是悬空的——最后那次。这不是缺陷，是这个
+        结构的固有性质，和"最后一批记录还没被封存"是同一回事。要它归零，
+        就得再封一个 epoch（哪怕只装一条心跳记录）并锚定。
+        """
+        return 1 if self._pending_attestation is not None else 0
+
     def seal_epoch(self) -> EpochSeal:
         start = (self._epochs[-1].end_seq + 1) if self._epochs else 0
         end = len(self._records) - 1
@@ -452,7 +575,9 @@ class Ledger:
             merkle_root=merkle_root(span),
             prev_epoch_hash=self._epochs[-1].epoch_hash() if self._epochs else GENESIS,
             sealed_at=now_iso(),
+            prev_anchor_attestation=self._pending_attestation,
         )
+        self._pending_attestation = None
         self._epochs.append(seal)
         return seal
 

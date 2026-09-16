@@ -160,7 +160,7 @@ def test_verify_path_fails_with_a_useful_message():
 # 且调用方必须处理 ImportError。模块顶层出现它们就是硬依赖，直接失败。
 SOFT_DEPS = {"asn1crypto", "cryptography"}
 
-WRITE_PATH_MODULES = ("record.py", "anchor.py")
+WRITE_PATH_MODULES = ("record.py", "anchor.py", "eutl.py")
 
 
 def _src_dir():
