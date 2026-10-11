@@ -40,6 +40,9 @@ this repo cannot show it).
 | 24 | "Signature verification is not hand-rolled" | `verify.py` uses `asn1crypto` + `cryptography` throughout; the only hand-written DER is the *request* encoder, which is byte-compared against openssl | **Holds** |
 | 25 | "Working end to end against three live TSAs" | `test_network.py`, 9 tests against FreeTSA / DigiCert / Sectigo, all passing. **This was false at the last review** — two of the three never had their signatures verified (see `docs/mutation-testing.md`). It is true now. | **Holds** |
 | 26 | "Apache-2.0. Copyright held by Li Zhuojun." | `LICENSE`; `pyproject.toml` `license = "Apache-2.0"`, `authors` | **Holds** |
+| 27 | "The stamping-time lookup … makes no network call" | `eutl.py` is in `test_zero_deps.py`'s `WRITE_PATH_MODULES` static scan; `test_eutl_lookup_module_has_no_third_party_imports`; the verdict is an index lookup plus a time-interval comparison | **Holds** |
+| 28 | "Changing any field of a recorded verdict fails the chain, and a record without one hashes exactly as it did in 0.1.0" | `test_tampering_with_any_attestation_field_changes_the_binding_epoch_hash`, `test_removing_the_attestation_entirely_is_also_detected`, `test_an_epoch_without_an_attestation_hashes_exactly_as_it_did_before`, `test_the_shipped_v0_1_0_disclosure_bundle_still_verifies_offline` | **Holds** |
+| 29 | "Of nine public free endpoints tested …, none is qualified" | Manual check on 2026-08-16 against a verified snapshot (LOTL sequence 390): each endpoint's signing certificate looked up in the trusted list. Endpoint list and the Actalis case are in `docs/eutl.md`. Endpoint certificates and list status both drift, and this repo pins neither. | **Unverifiable here** (dated measurement) |
 
 ## docs/article12.md
 

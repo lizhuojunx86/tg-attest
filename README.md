@@ -110,9 +110,20 @@ It doesn't parse model output into claims. Claim extraction needs an LLM, and an
 
 It doesn't replace Langfuse, Arize, or LangSmith. Different job — run both. There is no OTel exporter yet; if you want records in your existing traces today, attach `record_hash` to the span yourself. It's one attribute and it's the only value you need to join the two systems.
 
-The bundled default TSAs are **not** eIDAS qualified. Article 41(1) means a non-qualified timestamp is still admissible. Article 41(2) means only a qualified one shifts the burden of proof to whoever disputes it. Pick a QTSP from the [EU Trusted List](https://eidas.ec.europa.eu/efda/trust-services/) before you rely on this in a dispute, and record the provider's qualified status at stamping time. Qualification gets suspended and withdrawn; checking at verification time is checking too late.
+The bundled default TSAs are **not** eIDAS qualified. Article 41(1) means a non-qualified timestamp is still admissible. Article 41(2) means only a qualified one shifts the burden of proof to whoever disputes it. Pick a QTSP from the [EU Trusted List](https://eidas.ec.europa.eu/efda/trust-services/) before you rely on this in a dispute. Qualification gets suspended and withdrawn, so it has to be recorded at stamping time; checking at verification time is checking too late. That is the same problem the library exists to solve, showing up in the trust anchor itself, and since 0.2 the library records it for you. Next section.
 
-That last point is the same problem the library exists to solve, showing up in the trust anchor itself.
+## Qualified status, recorded at stamping time
+
+New in 0.2. eIDAS qualification is not a property of a TSA. It is a property of a (key, instant) pair: status gets suspended and withdrawn, and a provider that rotates its signing key gets a new trusted-list entry with its own status timeline. Ask three years later and you get a correct answer to a different question. So the verdict is computed the moment the token comes back, written into the **next** epoch's hashed body, and covered by that epoch's timestamp. Changing any field of a recorded verdict fails the chain, and a record without one hashes exactly as it did in 0.1.0 — the disclosure bundle committed to this repo still verifies bit-for-bit.
+
+```console
+$ pip install tg-attest[eutl]
+$ python -m tg_attest.eutl_build -o eutl_snapshot.json
+```
+
+The snapshot builds offline: download the LOTL, verify it against certificate digests published in the Official Journal, verify each of the 30 national lists against the certificates the LOTL registers for that country, write plain JSON. About 26 MB down, 2 MB out. The stamping-time lookup reads that JSON and makes no network call — an index lookup and a time comparison, cheap enough for a production decision path. Its answer is three-valued, and `None` means not checked, never not qualified: turning a network failure into a legal conclusion inside an immutable record would be the worst failure this feature could have.
+
+One observation from building it, useful even if you never install anything: **being a QTSP does not make a given endpoint's timestamps qualified.** Actalis is an Italian QTSP; its free endpoint `timestamp.actalis.it` signs with a CA that is not on the trusted list — the qualified entries cover the paid service. Of nine public free endpoints tested (FreeTSA, DigiCert, Sectigo, GlobalSign, Certum, SSL.com, Entrust, Apple, Actalis), none is qualified. Don't ask whether the company is a QTSP. Ask whether the certificate your endpoint signs with is on the list at the instant of stamping. That is the question this feature answers. Details, deliberate spec divergences and what it can't defend against: [docs/eutl.md](docs/eutl.md) (Chinese).
 
 ## What we found in our own code
 
@@ -135,6 +146,7 @@ requirement onto what this library does and does not cover, and
 ```bash
 pip install tg-attest              # writing path, zero dependencies
 pip install tg-attest[tsa]         # verification path, adds asn1crypto + cryptography
+pip install tg-attest[eutl]        # trusted-list snapshot builder, offline after the build
 ```
 
 Releases are published from a GitHub Actions workflow via PyPI Trusted Publishing — no API
@@ -161,7 +173,7 @@ Apache-2.0. Copyright held by Li Zhuojun.
 
 ## Status
 
-v0.1. Working end to end against three live TSAs. API will move before v1.
+v0.2. Working end to end against three live TSAs, with qualified-status verdicts from a verified EU Trusted List snapshot. API will move before v1.
 
 If you're working through Article 12 and I got something wrong, open an issue. I'd rather be corrected early.
 
